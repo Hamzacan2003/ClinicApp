@@ -1,5 +1,5 @@
-# 1. Derleme Aşaması (.NET 8 SDK)
-FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
+# 1. Derleme Aşaması (.NET 10 SDK)
+FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 WORKDIR /src
 
 # Proje referanslarını kopyala ve restore et
@@ -14,8 +14,8 @@ COPY . .
 WORKDIR "/src/WebAPI"
 RUN dotnet publish "WebAPI.csproj" -c Release -o /app/publish /p:UseAppHost=false
 
-# 2. Çalışma Aşaması (ASP.NET Core Runtime)
-FROM mcr.microsoft.com/dotnet/aspnet:8.0 AS final
+# 2. Çalışma Aşaması (ASP.NET Core 10 Runtime)
+FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS final
 WORKDIR /app
 COPY --from=build /app/publish .
 

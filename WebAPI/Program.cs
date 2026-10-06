@@ -67,7 +67,7 @@ builder.Services.AddControllers();
 builder.Services.AddFluentValidationAutoValidation();
 builder.Services.AddValidatorsFromAssemblyContaining<AppointmentBookValidator>();
 
-// 6. SignalR & CORS (Vercel ve tüm kaynaklara izin verecek şekilde)
+// 6. SignalR & CORS
 builder.Services.AddSignalR();
 builder.Services.AddCors(options =>
 {
@@ -89,6 +89,8 @@ var app = builder.Build();
 using (var scope = app.Services.CreateScope())
 {
     var services = scope.ServiceProvider;
+    var logger = services.GetRequiredService<ILogger<Program>>();
+
     try
     {
         var context = services.GetRequiredService<ClinicDbContext>();
@@ -106,7 +108,7 @@ using (var scope = app.Services.CreateScope())
             await roleManager.CreateAsync(new AppRole { Name = "Secretary" });
         }
 
-        // GEÇİCİ TEST DOKTORU (Sadece standart IdentityUser alanları kullanılır)
+        // GEÇİCİ TEST DOKTORU
         var userManager = services.GetRequiredService<UserManager<AppUser>>();
         var doctorEmail = "doktor@clinic.com";
 
@@ -132,13 +134,22 @@ using (var scope = app.Services.CreateScope())
                 };
                 context.Doctors.Add(doctorEntity);
                 await context.SaveChangesAsync();
+                logger.LogInformation(">>> TEST DOKTORU BASARIYLA OLUSTURULDU! E-posta: {Email}", doctorEmail);
             }
+            else
+            {
+                var errors = string.Join(", ", createResult.Errors.Select(e => e.Description));
+                logger.LogError(">>> DOKTOR KULLANICISI OLUSTURULAMADI! Hatalar: {Errors}", errors);
+            }
+        }
+        else
+        {
+            logger.LogInformation(">>> Test doktoru zaten veritabaninda mevcut.");
         }
     }
     catch (Exception ex)
     {
-        var logger = services.GetRequiredService<ILogger<Program>>();
-        logger.LogError(ex, "Migration veya tohumlama sırasında hata meydana geldi.");
+        logger.LogError(ex, ">>> Migration veya tohumlama sirasinda kritik hata!");
     }
 }
 

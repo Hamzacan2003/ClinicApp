@@ -67,13 +67,13 @@ builder.Services.AddControllers();
 builder.Services.AddFluentValidationAutoValidation();
 builder.Services.AddValidatorsFromAssemblyContaining<AppointmentBookValidator>();
 
-// 6. SignalR & CORS
+// 6. SignalR & CORS (Vercel ve tüm kaynaklara izin verecek şekilde)
 builder.Services.AddSignalR();
 builder.Services.AddCors(options =>
 {
     options.AddPolicy("AllowReactApp", policy =>
     {
-        policy.WithOrigins("http://localhost:5173", "http://localhost:3000")
+        policy.SetIsOriginAllowed(origin => true) // Vercel ve localhost dahil tüm domainlerin bağlanmasını sağlar
               .AllowAnyHeader()
               .AllowAnyMethod()
               .AllowCredentials();
@@ -85,36 +85,54 @@ builder.Services.AddSwaggerGen();
 
 var app = builder.Build();
 
-if (app.Environment.IsDevelopment())
+// OTOMATİK VERİTABANI OLUŞTURMA (MIGRATION) VE ROL OLUŞTURMA
+using (var scope = app.Services.CreateScope())
 {
-    app.UseSwagger();
-    app.UseSwaggerUI();
+    var services = scope.ServiceProvider;
+    try
+    {
+        // 1. Canlı Neon veritabanında tablolar yoksa hepsini (AspNetRoles vb.) otomatik basar
+        var context = services.GetRequiredService<ClinicDbContext>();
+        context.Database.Migrate();
+
+        // 2. Tablolar oluştuktan sonra rolleri kontrol eder ve eksikleri ekler
+        var roleManager = services.GetRequiredService<RoleManager<AppRole>>();
+
+        if (!await roleManager.RoleExistsAsync(AppRole.Doctor))
+        {
+            await roleManager.CreateAsync(new AppRole { Name = AppRole.Doctor });
+        }
+
+        if (!await roleManager.RoleExistsAsync("Secretary"))
+        {
+            await roleManager.CreateAsync(new AppRole { Name = "Secretary" });
+        }
+    }
+    catch (Exception ex)
+    {
+        var logger = services.GetRequiredService<ILogger<Program>>();
+        logger.LogError(ex, "Veritabanı migration veya rol oluşturma sırasında hata meydana geldi.");
+    }
 }
 
-// Statik Dosyalar ve Middleware'ler
+// Swagger'ı canlıda da test edebilmek için her zaman aktif yapalım
+app.UseSwagger();
+app.UseSwaggerUI();
+
+// Statik Dosyalar ve Klasör Güvenliği (Medikal Dosyalar / Resimler için)
+var storagePath = Path.Combine(app.Environment.ContentRootPath, "Storage", "MedicalUploads");
+if (!Directory.Exists(storagePath))
+{
+    Directory.CreateDirectory(storagePath);
+}
+
 app.UseStaticFiles();
 app.UseCors("AllowReactApp");
 app.UseHttpsRedirection();
 app.UseAuthentication();
 app.UseAuthorization();
+
 app.MapControllers();
 app.MapHub<ClinicHub>("/clinichub");
-
-// SADECE EKSİK ROLLERİ OLUŞTURMA
-using (var scope = app.Services.CreateScope())
-{
-    var services = scope.ServiceProvider;
-    var roleManager = services.GetRequiredService<RoleManager<AppRole>>();
-
-    if (!await roleManager.RoleExistsAsync(AppRole.Doctor))
-    {
-        await roleManager.CreateAsync(new AppRole { Name = AppRole.Doctor });
-    }
-
-    if (!await roleManager.RoleExistsAsync("Secretary"))
-    {
-        await roleManager.CreateAsync(new AppRole { Name = "Secretary" });
-    }
-}
 
 app.Run();

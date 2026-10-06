@@ -1,0 +1,11 @@
+.vs/ 
+bin/ 
+obj/ 
+clinic-ui/node_modules/ 
+clinic-ui/dist/ 
+Storage/MedicalUploads/* 
+!Storage/MedicalUploads/.gitkeep 
+wwwroot/uploads/* 
+!wwwroot/uploads/.gitkeep 
+appsettings.Production.json 
+.env

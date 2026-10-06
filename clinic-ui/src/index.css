@@ -1,0 +1,66 @@
+/* ========================================================
+   GLOBAL RESPONSIVE & MOBILE-FIRST OPTIMIZATION
+   ======================================================== */
+
+/* 1. Viewport & Genel Kapsayıcı Güvenliği */
+html, body {
+  overflow-x: hidden;
+  width: 100%;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* 2. Responsive Form ve Input Kontrolleri */
+input, select, textarea, button {
+  font-size: 16px !important; /* iOS mobil tarayıcılarda otomatik zoom yapmasını engeller */
+}
+
+/* 3. Randevu & Muayene Tabloları İçin Mobil Kaydırma Sarmalayıcısı */
+.responsive-table-wrapper {
+  width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  margin-bottom: 1rem;
+  border-radius: 0.75rem;
+}
+
+/* 4. Ekran Boyut Kademeleri (Breakpoints) */
+
+/* Mobil Ekranlar (320px - 640px) */
+@media (max-width: 640px) {
+  .container {
+    padding-left: 1rem !important;
+    padding-right: 1rem !important;
+  }
+
+  .grid-cols-2, .grid-cols-3, .grid-cols-4 {
+    grid-template-columns: 1fr !important;
+  }
+
+  .slot-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+    gap: 0.5rem !important;
+  }
+
+  .mobile-w-full {
+    width: 100% !important;
+  }
+
+  h1 { font-size: 1.5rem !important; }
+  h2 { font-size: 1.25rem !important; }
+}
+
+/* Tablet Ekranlar (641px - 1024px) */
+@media (min-width: 641px) and (max-width: 1024px) {
+  .container {
+    padding-left: 1.5rem !important;
+    padding-right: 1.5rem !important;
+  }
+
+  .grid-cols-3, .grid-cols-4 {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+
+  .slot-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
+  }
+}

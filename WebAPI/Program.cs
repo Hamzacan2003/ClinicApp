@@ -73,7 +73,7 @@ builder.Services.AddCors(options =>
 {
     options.AddPolicy("AllowReactApp", policy =>
     {
-        policy.SetIsOriginAllowed(origin => true) // Vercel ve localhost dahil tüm domainlerin bağlanmasını sağlar
+        policy.SetIsOriginAllowed(origin => true)
               .AllowAnyHeader()
               .AllowAnyMethod()
               .AllowCredentials();
@@ -85,17 +85,15 @@ builder.Services.AddSwaggerGen();
 
 var app = builder.Build();
 
-// OTOMATİK VERİTABANI OLUŞTURMA (MIGRATION) VE ROL OLUŞTURMA
+// OTOMATİK VERİTABANI OLUŞTURMA (MIGRATION), ROL VE TEST DOKTORU TOHUMLAMA (SEED)
 using (var scope = app.Services.CreateScope())
 {
     var services = scope.ServiceProvider;
     try
     {
-        // 1. Canlı Neon veritabanında tablolar yoksa hepsini (AspNetRoles vb.) otomatik basar
         var context = services.GetRequiredService<ClinicDbContext>();
         context.Database.Migrate();
 
-        // 2. Tablolar oluştuktan sonra rolleri kontrol eder ve eksikleri ekler
         var roleManager = services.GetRequiredService<RoleManager<AppRole>>();
 
         if (!await roleManager.RoleExistsAsync(AppRole.Doctor))
@@ -107,19 +105,46 @@ using (var scope = app.Services.CreateScope())
         {
             await roleManager.CreateAsync(new AppRole { Name = "Secretary" });
         }
+
+        // GEÇİCİ TEST DOKTORU (Sadece standart IdentityUser alanları kullanılır)
+        var userManager = services.GetRequiredService<UserManager<AppUser>>();
+        var doctorEmail = "doktor@clinic.com";
+
+        var existingDoctor = await userManager.FindByEmailAsync(doctorEmail);
+        if (existingDoctor == null)
+        {
+            var doctorUser = new AppUser
+            {
+                UserName = doctorEmail,
+                Email = doctorEmail,
+                EmailConfirmed = true
+            };
+
+            var createResult = await userManager.CreateAsync(doctorUser, "Doktor123!");
+            if (createResult.Succeeded)
+            {
+                await userManager.AddToRoleAsync(doctorUser, AppRole.Doctor);
+
+                var doctorEntity = new Doctor
+                {
+                    AppUserId = doctorUser.Id,
+                    Specialty = "Dahiliye"
+                };
+                context.Doctors.Add(doctorEntity);
+                await context.SaveChangesAsync();
+            }
+        }
     }
     catch (Exception ex)
     {
         var logger = services.GetRequiredService<ILogger<Program>>();
-        logger.LogError(ex, "Veritabanı migration veya rol oluşturma sırasında hata meydana geldi.");
+        logger.LogError(ex, "Migration veya tohumlama sırasında hata meydana geldi.");
     }
 }
 
-// Swagger'ı canlıda da test edebilmek için her zaman aktif yapalım
 app.UseSwagger();
 app.UseSwaggerUI();
 
-// Statik Dosyalar ve Klasör Güvenliği (Medikal Dosyalar / Resimler için)
 var storagePath = Path.Combine(app.Environment.ContentRootPath, "Storage", "MedicalUploads");
 if (!Directory.Exists(storagePath))
 {

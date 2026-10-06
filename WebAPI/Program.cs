@@ -85,7 +85,7 @@ builder.Services.AddSwaggerGen();
 
 var app = builder.Build();
 
-// OTOMATİK VERİTABANI OLUŞTURMA (MIGRATION), ROL VE TEST DOKTORU TOHUMLAMA (SEED)
+// OTOMATİK VERİTABANI OLUŞTURMA (MIGRATION) VE TEMEL ROLLER
 using (var scope = app.Services.CreateScope())
 {
     var services = scope.ServiceProvider;
@@ -107,55 +107,17 @@ using (var scope = app.Services.CreateScope())
         {
             await roleManager.CreateAsync(new AppRole { Name = "Secretary" });
         }
-
-        // GEÇİCİ TEST DOKTORU
-        var userManager = services.GetRequiredService<UserManager<AppUser>>();
-        var doctorEmail = "doktor@clinic.com";
-
-        var existingDoctor = await userManager.FindByEmailAsync(doctorEmail);
-        if (existingDoctor == null)
-        {
-            var doctorUser = new AppUser
-            {
-                UserName = doctorEmail,
-                Email = doctorEmail,
-                EmailConfirmed = true
-            };
-
-            var createResult = await userManager.CreateAsync(doctorUser, "Doktor123!");
-            if (createResult.Succeeded)
-            {
-                await userManager.AddToRoleAsync(doctorUser, AppRole.Doctor);
-
-                var doctorEntity = new Doctor
-                {
-                    AppUserId = doctorUser.Id,
-                    Specialty = "Dahiliye"
-                };
-                context.Doctors.Add(doctorEntity);
-                await context.SaveChangesAsync();
-                logger.LogInformation(">>> TEST DOKTORU BASARIYLA OLUSTURULDU! E-posta: {Email}", doctorEmail);
-            }
-            else
-            {
-                var errors = string.Join(", ", createResult.Errors.Select(e => e.Description));
-                logger.LogError(">>> DOKTOR KULLANICISI OLUSTURULAMADI! Hatalar: {Errors}", errors);
-            }
-        }
-        else
-        {
-            logger.LogInformation(">>> Test doktoru zaten veritabaninda mevcut.");
-        }
     }
     catch (Exception ex)
     {
-        logger.LogError(ex, ">>> Migration veya tohumlama sirasinda kritik hata!");
+        logger.LogError(ex, "Veritabanı migration veya temel rol oluşturma sırasında hata meydana geldi.");
     }
 }
 
 app.UseSwagger();
 app.UseSwaggerUI();
 
+// Medikal Dosyalar / Resimler için depolama dizini
 var storagePath = Path.Combine(app.Environment.ContentRootPath, "Storage", "MedicalUploads");
 if (!Directory.Exists(storagePath))
 {

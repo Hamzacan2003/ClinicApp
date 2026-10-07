@@ -188,34 +188,31 @@ namespace WebAPI.Controllers
             return Ok(new { message = "Muayene kaydı ve tahliller kalıcı olarak sisteme işlendi." });
         }
 
-        // 3. DOSYA İNDİRME / AÇMA (VERİTABANINDAN DOĞRUDAN OKUMA)
+        // 3. DOSYA İNDİRME / AÇMA
         [AllowAnonymous]
         [HttpGet("attachment/{fileName}")]
         public async Task<IActionResult> GetAttachment(string fileName)
         {
-            // Önce veritabanında bu dosya kaydı var mı bak
             var attachment = await _context.Attachments.FirstOrDefaultAsync(a => a.StoredFileName == fileName);
 
             if (attachment != null && !string.IsNullOrEmpty(attachment.FilePath))
             {
-                // Eğer Base64 olarak kaydedildiyse byte array'e çevirip bas
                 try
                 {
                     var fileBytes = Convert.FromBase64String(attachment.FilePath);
-                    return File(fileBytes, attachment.ContentType, attachment.OriginalFileName);
+                    // 'inline' sayesinde tarayıcı dosyayı indirmek yerine yeni sekmede görüntüler:
+                    Response.Headers.Append("Content-Disposition", $"inline; filename=\"{attachment.OriginalFileName}\"");
+                    return File(fileBytes, attachment.ContentType);
                 }
-                catch
-                {
-                    // Eski usul disk yoluysa fallback olarak diske bak
-                }
+                catch { }
             }
 
-            // Fallback: Diskte eski dosya varsa oradan oku
             var p1 = Path.Combine(_env.ContentRootPath, "Storage", "MedicalUploads", fileName);
             if (System.IO.File.Exists(p1))
             {
                 var ext = Path.GetExtension(p1).ToLowerInvariant();
-                var contentType = ext == ".pdf" ? "application/pdf" : "image/jpeg";
+                var contentType = ext == ".pdf" ? "application/pdf" : (ext == ".png" ? "image/png" : "image/jpeg");
+                Response.Headers.Append("Content-Disposition", "inline");
                 return PhysicalFile(p1, contentType);
             }
 

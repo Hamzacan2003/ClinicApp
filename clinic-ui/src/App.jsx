@@ -176,7 +176,7 @@ export default function App() {
     if (selectedDoctor && selectedDate) fetchSlots(selectedDoctor.id, selectedDate);
   }, [selectedDoctor, selectedDate]);
 
-  const fetchSlots = async (docId, dateStr) => {
+const fetchSlots = async (docId, dateStr) => {
     setLoadingSlots(true);
     setSelectedSlot(null);
     try {
@@ -187,6 +187,15 @@ export default function App() {
     } finally {
       setLoadingSlots(false);
     }
+  };
+
+  const isSlotInPast = (slotTimeStr) => {
+    const todayStr = new Date().toLocaleDateString('en-CA'); 
+    if (selectedDate !== todayStr) return false;
+
+    const [slotH, slotM] = slotTimeStr.split(':').map(Number);
+    const now = new Date();
+    return (slotH < now.getHours()) || (slotH === now.getHours() && slotM <= now.getMinutes());
   };
 
   useEffect(() => {
@@ -822,23 +831,28 @@ const getFullImageUrl = (url) => {
                     </div>
                   ) : (
                     <div className="grid grid-cols-4 gap-2">
-                      {slots.map(slot => (
-                        <button
-                          key={slot.formattedTime}
-                          type="button"
-                          disabled={!slot.isAvailable}
-                          onClick={() => setSelectedSlot(slot)}
-                          className={`py-2 text-xs font-bold rounded-xl transition ${
-                            !slot.isAvailable 
-                              ? 'bg-slate-100 text-slate-400 cursor-not-allowed line-through' 
-                              : selectedSlot?.formattedTime === slot.formattedTime
-                                ? 'bg-sky-600 text-white shadow-md'
-                                : 'bg-slate-50 text-slate-700 border border-slate-200 hover:border-sky-500 hover:bg-sky-50'
-                          }`}
-                        >
-                          {slot.formattedTime}
-                        </button>
-                      ))}
+                   {slots.map(slot => {
+  const isPast = isSlotInPast(slot.formattedTime);
+  const isAvailable = slot.isAvailable && !isPast;
+
+  return (
+    <button
+      key={slot.formattedTime}
+      type="button"
+      disabled={!isAvailable}
+      onClick={() => setSelectedSlot(slot)}
+      className={`py-2 text-xs font-bold rounded-xl transition ${
+        !isAvailable
+          ? 'bg-slate-100 text-slate-400 cursor-not-allowed line-through'
+          : selectedSlot?.formattedTime === slot.formattedTime
+            ? 'bg-sky-600 text-white shadow-md'
+            : 'bg-slate-50 text-slate-700 border border-slate-200 hover:border-sky-500 hover:bg-sky-50'
+      }`}
+    >
+      {slot.formattedTime}
+    </button>
+  );
+})}
                     </div>
                   )}
                 </div>

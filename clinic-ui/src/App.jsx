@@ -552,10 +552,14 @@ useEffect(() => {
   const completedAppointments = dailyAppointments.filter(a => a.hasMedicalRecord);
 
 const getFullImageUrl = (url) => {
-  if (!url) return '';
-  if (url.startsWith('http://') || url.startsWith('https://')) return url;
-  return `https://clinic-api-bs2z.onrender.com${url}`;
-};
+    if (!url) return '';
+    // Eğer resim base64 (data:) veya zaten tam link ise dokunma
+    if (url.startsWith('data:') || url.startsWith('http://') || url.startsWith('https://')) {
+      return url;
+    }
+    const cleanPath = url.startsWith('/') ? url : `/${url}`;
+    return `https://clinic-api-bs2z.onrender.com${cleanPath}`;
+  };
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-800">

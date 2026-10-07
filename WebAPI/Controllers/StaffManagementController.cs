@@ -4,6 +4,11 @@ using Business.Interfaces;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Threading.Tasks;
 
 namespace WebAPI.Controllers
 {
@@ -177,20 +182,17 @@ namespace WebAPI.Controllers
 
             try
             {
-                // 1. Doktorun takvimini temizle
                 if (doc.Schedules != null && doc.Schedules.Any())
                 {
                     _context.DoctorSchedules.RemoveRange(doc.Schedules);
                 }
 
-                // 2. Doktorun izinlerini temizle
                 var timeOffs = await _context.DoctorTimeOffs.Where(t => t.DoctorId == id).ToListAsync();
                 if (timeOffs.Any())
                 {
                     _context.DoctorTimeOffs.RemoveRange(timeOffs);
                 }
 
-                // 3. Eğer doktorun muayeneleri ve dosyaları varsa (Foreign Key ihlalini engellemek için):
                 foreach (var app in doc.Appointments)
                 {
                     if (app.MedicalRecord != null)
@@ -203,13 +205,11 @@ namespace WebAPI.Controllers
                     }
                 }
 
-                // 4. Randevuları kaldır
                 if (doc.Appointments.Any())
                 {
                     _context.Appointments.RemoveRange(doc.Appointments);
                 }
 
-                // 5. Doktoru ve Identity Kullanıcısını Kaldır
                 _context.Doctors.Remove(doc);
                 await _context.SaveChangesAsync();
 
@@ -226,6 +226,7 @@ namespace WebAPI.Controllers
             }
         }
 
+        // TAHSİLAT & ÇOKLU İŞLEM EKLEME (GÜNCELLENDİ)
         [HttpPost("charge-appointment")]
         public async Task<IActionResult> ChargeAppointment([FromBody] ChargeRequest req)
         {
@@ -236,6 +237,9 @@ namespace WebAPI.Controllers
             if (appointment == null) return NotFound(new { message = "Randevu bulunamadı." });
 
             decimal totalAmount = 0;
+            var summaryList = new List<string>();
+
+            // Yeni eklenen işlemleri AppointmentTreatments tablosuna ekle
             foreach (var item in req.Treatments)
             {
                 _context.AppointmentTreatments.Add(new AppointmentTreatment
@@ -246,7 +250,10 @@ namespace WebAPI.Controllers
                     CreatedAt = DateTime.UtcNow
                 });
                 totalAmount += item.Price;
+                summaryList.Add($"{item.ProcedureName}: {item.Price} ₺");
             }
+
+            string treatmentSummary = string.Join(" | ", summaryList);
 
             if (appointment.Payment == null)
             {
@@ -256,20 +263,31 @@ namespace WebAPI.Controllers
                     Amount = totalAmount,
                     PaymentMethod = req.PaymentMethod,
                     Status = DataAccess.Enums.PaymentStatus.Paid,
+                    TransactionReference = treatmentSummary,
                     PaidAt = DateTime.UtcNow,
                     CreatedAt = DateTime.UtcNow
                 };
+                _context.Payments.Add(appointment.Payment);
             }
             else
             {
                 appointment.Payment.Amount = totalAmount;
                 appointment.Payment.PaymentMethod = req.PaymentMethod;
                 appointment.Payment.Status = DataAccess.Enums.PaymentStatus.Paid;
+                appointment.Payment.TransactionReference = string.IsNullOrEmpty(appointment.Payment.TransactionReference)
+                    ? treatmentSummary
+                    : $"{appointment.Payment.TransactionReference} | {treatmentSummary}";
                 appointment.Payment.PaidAt = DateTime.UtcNow;
             }
 
             await _context.SaveChangesAsync();
-            return Ok(new { message = "Tahsilat kaydedildi!", totalAmount, status = "Paid" });
+            return Ok(new
+            {
+                message = "Tahsilat ve işlemler başarıyla kaydedildi!",
+                totalAmount,
+                treatmentSummary = appointment.Payment.TransactionReference,
+                status = "Paid"
+            });
         }
 
         [HttpGet("daily-revenue")]
@@ -287,6 +305,7 @@ namespace WebAPI.Controllers
                     PatientName = $"{p.Appointment.Patient.FirstName} {p.Appointment.Patient.LastName}",
                     p.Amount,
                     p.PaymentMethod,
+                    TreatmentDetails = p.TransactionReference ?? "Genel Muayene",
                     Time = p.PaidAt.Value.ToString("HH:mm")
                 })
                 .ToListAsync();
@@ -323,7 +342,7 @@ namespace WebAPI.Controllers
 
             var banner = new ClinicBanner
             {
-                ImageUrl = dataUrl, // Doğrudan Neon DB'ye kalıcı URL olarak yazılır
+                ImageUrl = dataUrl,
                 Title = "Yeni Klinik Hizmeti",
                 Subtitle = "Modern tıp teknolojisiyle hizmetinizdeyiz.",
                 CreatedAt = DateTime.UtcNow
@@ -371,7 +390,7 @@ namespace WebAPI.Controllers
             await _context.SaveChangesAsync();
             return Ok(new { message = "Resim vitrinden kaldırıldı." });
         }
-        // WebAPI/Controllers/StaffManagementController.cs içine eklenecek metod:
+
         [HttpPost("create-staff")]
         public async Task<IActionResult> CreateStaff([FromBody] CreateStaffRequest req)
         {
@@ -398,7 +417,6 @@ namespace WebAPI.Controllers
                 return BadRequest(new { message = $"Kullanıcı oluşturulamadı: {err}" });
             }
 
-            // Rolü Ata (Doctor veya Staff/Sekreter)
             var role = req.Role == "Doktor" ? AppRole.Doctor : "Secretary";
             await _userManager.AddToRoleAsync(user, role);
 
@@ -415,7 +433,6 @@ namespace WebAPI.Controllers
                 _context.Doctors.Add(doctor);
                 await _context.SaveChangesAsync();
 
-                // Varsayılan Haftalık Çalışma Takvimi Ekle (Pzt-Cum)
                 var days = new[] { DayOfWeek.Monday, DayOfWeek.Tuesday, DayOfWeek.Wednesday, DayOfWeek.Thursday, DayOfWeek.Friday };
                 foreach (var day in days)
                 {

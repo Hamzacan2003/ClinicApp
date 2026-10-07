@@ -27,7 +27,7 @@ namespace WebAPI.Controllers
             _env = env;
         }
 
-        // 1. GÜNLÜK RANDEVULAR (CANLI VE 401 HATASIZ LİSTELEME)
+        // 1. GÜNLÜK RANDEVULAR (CANLI VE FATURA / İŞLEM DETAYLI)
         [HttpGet("daily-appointments")]
         public async Task<IActionResult> GetDailyAppointments([FromQuery] Guid? doctorId, [FromQuery] DateTime date)
         {
@@ -99,6 +99,7 @@ namespace WebAPI.Controllers
                     PaymentStatus = a.Payment != null ? a.Payment.Status.ToString() : "Unpaid",
                     PaymentAmount = a.Payment != null ? a.Payment.Amount : 1500,
                     PaymentMethod = a.Payment?.PaymentMethod ?? "Belirtilmedi",
+                    TreatmentDetails = a.Payment?.TransactionReference ?? "Genel Muayene", // <--- Kalem Detayları
                     HasMedicalRecord = a.MedicalRecord != null,
                     Diagnosis = a.MedicalRecord?.Diagnosis ?? "",
                     ClinicalNotes = a.MedicalRecord?.ClinicalNotes ?? "",
@@ -110,7 +111,7 @@ namespace WebAPI.Controllers
             return Ok(result);
         }
 
-        // 2. MUAYENE KAYDI & DOSYA EKLEME / GÜNCELLEME (VERİTABANINDA KALICI SAKLAMA)
+        // 2. MUAYENE KAYDI & DOSYA EKLEME / GÜNCELLEME (VERİTABANI KALICI SAKLAMA)
         [HttpPost("add-medical-record")]
         [RequestSizeLimit(30_000_000)] // 30 MB
         public async Task<IActionResult> AddMedicalRecord([FromForm] AddMedicalRecordDto dto, [FromForm] List<IFormFile>? files)
@@ -163,7 +164,6 @@ namespace WebAPI.Controllers
 
                     var safeFileName = $"{Guid.NewGuid()}{ext}";
 
-                    // Dosyayı diske değil, belleğe alıp Base64 olarak veritabanına gömüyoruz
                     using var memoryStream = new MemoryStream();
                     await file.CopyToAsync(memoryStream);
                     var fileBytes = memoryStream.ToArray();
@@ -173,7 +173,7 @@ namespace WebAPI.Controllers
                     {
                         OriginalFileName = file.FileName,
                         StoredFileName = safeFileName,
-                        FilePath = base64Content, // Veritabanında kalıcı saklanır, restartta silinmez!
+                        FilePath = base64Content,
                         ContentType = file.ContentType,
                         FileSizeBytes = file.Length,
                         Category = ext == ".pdf" ? "Report" : "XRay",
@@ -188,7 +188,7 @@ namespace WebAPI.Controllers
             return Ok(new { message = "Muayene kaydı ve tahliller kalıcı olarak sisteme işlendi." });
         }
 
-        // 3. DOSYA İNDİRME / AÇMA
+        // 3. DOSYA İNDİRME / AÇMA (TARAYICIDA DOĞRUDAN GÖRÜNTÜLEME)
         [AllowAnonymous]
         [HttpGet("attachment/{fileName}")]
         public async Task<IActionResult> GetAttachment(string fileName)
@@ -200,7 +200,6 @@ namespace WebAPI.Controllers
                 try
                 {
                     var fileBytes = Convert.FromBase64String(attachment.FilePath);
-                    // 'inline' sayesinde tarayıcı dosyayı indirmek yerine yeni sekmede görüntüler:
                     Response.Headers.Append("Content-Disposition", $"inline; filename=\"{attachment.OriginalFileName}\"");
                     return File(fileBytes, attachment.ContentType);
                 }
@@ -218,14 +217,15 @@ namespace WebAPI.Controllers
 
             return NotFound(new { message = "Dosya bulunamadı: " + fileName });
         }
-        // 4. HASTA GEÇMİŞİ
+
+        // 4. HASTA GEÇMİŞİ (FATURA VE İŞLEM KALEMLERİ DAHİL)
         [HttpGet("patient-history/{nationalId}")]
         public async Task<IActionResult> GetPatientHistory(string nationalId)
         {
             var records = await _context.MedicalRecords
                 .Include(m => m.Doctor).ThenInclude(d => d.AppUser)
                 .Include(m => m.Attachments)
-                .Include(m => m.Appointment)
+                .Include(m => m.Appointment).ThenInclude(a => a.Payment)
                 .Where(m => m.Patient.NationalId == nationalId)
                 .OrderByDescending(m => m.CreatedAt)
                 .Select(m => new
@@ -237,6 +237,9 @@ namespace WebAPI.Controllers
                     m.ClinicalNotes,
                     m.Prescription,
                     m.FollowUpDate,
+                    PaymentAmount = m.Appointment.Payment != null ? m.Appointment.Payment.Amount : 0,
+                    PaymentStatus = m.Appointment.Payment != null ? m.Appointment.Payment.Status.ToString() : "Unpaid",
+                    TreatmentDetails = m.Appointment.Payment != null ? (m.Appointment.Payment.TransactionReference ?? "Genel Muayene") : "Genel Muayene", // <--- İşlem Detayları
                     Attachments = m.Attachments.Select(att => new
                     {
                         att.OriginalFileName,

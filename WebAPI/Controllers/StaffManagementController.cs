@@ -312,33 +312,27 @@ namespace WebAPI.Controllers
         }
 
         [HttpPost("banners/upload")]
-        public async Task<IActionResult> UploadBanner(IFormFile file, [FromQuery] string? title, [FromQuery] string? subtitle)
+        public async Task<IActionResult> UploadBanner([FromForm] IFormFile file)
         {
             if (file == null || file.Length == 0) return BadRequest("Dosya seçilmedi.");
 
-            var folder = Path.Combine(_env.ContentRootPath, "Storage", "Banners");
-            if (!Directory.Exists(folder)) Directory.CreateDirectory(folder);
-
-            var fileName = $"{Guid.NewGuid()}_{Path.GetFileName(file.FileName)}";
-            var filePath = Path.Combine(folder, fileName);
-
-            using (var stream = new FileStream(filePath, FileMode.Create))
-            {
-                await file.CopyToAsync(stream);
-            }
+            using var memoryStream = new MemoryStream();
+            await file.CopyToAsync(memoryStream);
+            var base64 = Convert.ToBase64String(memoryStream.ToArray());
+            var dataUrl = $"data:{file.ContentType};base64,{base64}";
 
             var banner = new ClinicBanner
             {
-                ImageUrl = $"/api/StaffManagement/banner-file/{fileName}",
-                Title = title ?? "Modern Cerrahi & Tanı Merkezi",
-                Subtitle = subtitle ?? "Çankaya / Ankara adresinde haftanın 6 günü hizmetinizdeyiz.",
+                ImageUrl = dataUrl, // Doğrudan Neon DB'ye kalıcı URL olarak yazılır
+                Title = "Yeni Klinik Hizmeti",
+                Subtitle = "Modern tıp teknolojisiyle hizmetinizdeyiz.",
                 CreatedAt = DateTime.UtcNow
             };
 
             _context.ClinicBanners.Add(banner);
             await _context.SaveChangesAsync();
 
-            return Ok(banner);
+            return Ok(new { message = "Banner başarıyla kaydedildi.", banner });
         }
 
         [HttpGet("banner-file/{fileName}")]

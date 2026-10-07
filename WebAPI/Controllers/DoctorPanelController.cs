@@ -110,7 +110,7 @@ namespace WebAPI.Controllers
             return Ok(result);
         }
 
-        // 2. MUAYENE KAYDI & DOSYA EKLEME / GÜNCELLEME
+        // 2. MUAYENE KAYDI & DOSYA EKLEME / GÜNCELLEME (VERİTABANINDA KALICI SAKLAMA)
         [HttpPost("add-medical-record")]
         [RequestSizeLimit(30_000_000)] // 30 MB
         public async Task<IActionResult> AddMedicalRecord([FromForm] AddMedicalRecordDto dto, [FromForm] List<IFormFile>? files)
@@ -122,10 +122,6 @@ namespace WebAPI.Controllers
 
             if (appointment == null)
                 return NotFound("Randevu bulunamadı.");
-
-            var uploadsFolder = Path.Combine(_env.ContentRootPath, "Storage", "MedicalUploads");
-            if (!Directory.Exists(uploadsFolder))
-                Directory.CreateDirectory(uploadsFolder);
 
             MedicalRecord record;
             if (appointment.MedicalRecord == null)
@@ -166,18 +162,18 @@ namespace WebAPI.Controllers
                         return BadRequest($"İzin verilmeyen dosya formatı: {ext}");
 
                     var safeFileName = $"{Guid.NewGuid()}{ext}";
-                    var filePath = Path.Combine(uploadsFolder, safeFileName);
 
-                    using (var stream = new FileStream(filePath, FileMode.Create))
-                    {
-                        await file.CopyToAsync(stream);
-                    }
+                    // Dosyayı diske değil, belleğe alıp Base64 olarak veritabanına gömüyoruz
+                    using var memoryStream = new MemoryStream();
+                    await file.CopyToAsync(memoryStream);
+                    var fileBytes = memoryStream.ToArray();
+                    var base64Content = Convert.ToBase64String(fileBytes);
 
                     record.Attachments.Add(new Attachment
                     {
                         OriginalFileName = file.FileName,
                         StoredFileName = safeFileName,
-                        FilePath = filePath,
+                        FilePath = base64Content, // Veritabanında kalıcı saklanır, restartta silinmez!
                         ContentType = file.ContentType,
                         FileSizeBytes = file.Length,
                         Category = ext == ".pdf" ? "Report" : "XRay",
@@ -189,41 +185,42 @@ namespace WebAPI.Controllers
             appointment.Status = AppointmentStatus.Completed;
             await _context.SaveChangesAsync();
 
-            return Ok(new { message = "Muayene kaydı ve tahliller başarıyla sisteme işlendi." });
+            return Ok(new { message = "Muayene kaydı ve tahliller kalıcı olarak sisteme işlendi." });
         }
 
-        // 3. DOSYA İNDİRME / AÇMA
+        // 3. DOSYA İNDİRME / AÇMA (VERİTABANINDAN DOĞRUDAN OKUMA)
         [AllowAnonymous]
         [HttpGet("attachment/{fileName}")]
-        public IActionResult GetAttachment(string fileName)
+        public async Task<IActionResult> GetAttachment(string fileName)
         {
-            var p1 = Path.Combine(_env.ContentRootPath, "Storage", "MedicalUploads", fileName);
-            var webRoot = _env.WebRootPath ?? Path.Combine(Directory.GetCurrentDirectory(), "wwwroot");
-            var p2 = Path.Combine(webRoot, "uploads", fileName);
-            var p3 = Path.Combine(webRoot, "uploads", "medical_records", fileName);
+            // Önce veritabanında bu dosya kaydı var mı bak
+            var attachment = await _context.Attachments.FirstOrDefaultAsync(a => a.StoredFileName == fileName);
 
-            string? targetPath = null;
-            if (System.IO.File.Exists(p1)) targetPath = p1;
-            else if (System.IO.File.Exists(p2)) targetPath = p2;
-            else if (System.IO.File.Exists(p3)) targetPath = p3;
-
-            if (string.IsNullOrEmpty(targetPath) || !System.IO.File.Exists(targetPath))
+            if (attachment != null && !string.IsNullOrEmpty(attachment.FilePath))
             {
-                return NotFound(new { message = "Dosya sunucuda bulunamadı: " + fileName });
+                // Eğer Base64 olarak kaydedildiyse byte array'e çevirip bas
+                try
+                {
+                    var fileBytes = Convert.FromBase64String(attachment.FilePath);
+                    return File(fileBytes, attachment.ContentType, attachment.OriginalFileName);
+                }
+                catch
+                {
+                    // Eski usul disk yoluysa fallback olarak diske bak
+                }
             }
 
-            var ext = Path.GetExtension(targetPath).ToLowerInvariant();
-            var contentType = ext switch
+            // Fallback: Diskte eski dosya varsa oradan oku
+            var p1 = Path.Combine(_env.ContentRootPath, "Storage", "MedicalUploads", fileName);
+            if (System.IO.File.Exists(p1))
             {
-                ".jpg" or ".jpeg" => "image/jpeg",
-                ".png" => "image/png",
-                ".pdf" => "application/pdf",
-                _ => "application/octet-stream"
-            };
+                var ext = Path.GetExtension(p1).ToLowerInvariant();
+                var contentType = ext == ".pdf" ? "application/pdf" : "image/jpeg";
+                return PhysicalFile(p1, contentType);
+            }
 
-            return PhysicalFile(targetPath, contentType);
+            return NotFound(new { message = "Dosya bulunamadı: " + fileName });
         }
-
         // 4. HASTA GEÇMİŞİ
         [HttpGet("patient-history/{nationalId}")]
         public async Task<IActionResult> GetPatientHistory(string nationalId)

@@ -1,11 +1,10 @@
 ﻿using Business.Interfaces;
-using MailKit.Net.Smtp;
 using MailKit.Security;
 using Microsoft.Extensions.Configuration;
 using MimeKit;
 using System;
-using System.Net.Mail;
 using System.Threading.Tasks;
+// DİKKAT: 'using System.Net.Mail;' kaldırıldı!
 
 namespace Business.Services
 {
@@ -24,16 +23,19 @@ namespace Business.Services
             var portStr = _config["EmailSettings:Port"] ?? "465";
             int port = int.TryParse(portStr, out int p) ? p : 465;
 
-            // Render ortamındaki hem 'SenderEmail' hem de 'Email' anahtarlarını kontrol et
-            var senderEmail = _config["EmailSettings:SenderEmail"] ?? _config["EmailSettings:Email"];
-            var password = _config["EmailSettings:SenderPassword"] ?? _config["EmailSettings:Password"];
+            var senderEmail = _config["EmailSettings:SenderEmail"]
+                           ?? _config["EmailSettings:Email"]
+                           ?? _config["EmailSettings__SenderEmail"];
 
-            if (string.IsNullOrWhiteSpace(senderEmail) ||
-                string.IsNullOrWhiteSpace(password) ||
-                password.Contains("xxxx") ||
-                senderEmail.Contains("seninmailin"))
+            var password = _config["EmailSettings:SenderPassword"]
+                        ?? _config["EmailSettings:Password"]
+                        ?? _config["EmailSettings__SenderPassword"];
+
+            Console.WriteLine($"[MAIL TEST] Host: {host}, Port: {port}, Gönderen: {senderEmail}, Alıcı: {toEmail}");
+
+            if (string.IsNullOrWhiteSpace(senderEmail) || string.IsNullOrWhiteSpace(password))
             {
-                Console.WriteLine($"[BİLGİ] SMTP ayarları eksik veya geçersiz olduğu için e-posta gönderimi es geçildi: {toEmail}");
+                Console.WriteLine($"[MAIL UYARI] SenderEmail veya Password boş geldiği için gönderim iptal edildi!");
                 return;
             }
 
@@ -47,24 +49,29 @@ namespace Business.Services
                 var bodyBuilder = new BodyBuilder { HtmlBody = htmlBody };
                 message.Body = bodyBuilder.ToMessageBody();
 
-                using var client = new SmtpClient();
-                client.Timeout = 10000; // 10 saniye
+                // Çakışmayı önlemek için tam adresiyle (MailKit.Net.Smtp.SmtpClient) oluşturuyoruz
+                using var client = new MailKit.Net.Smtp.SmtpClient();
+                client.Timeout = 10000;
 
-                // Port 465 için doğrudan SSL, diğerleri için StartTls
-                var secureSocketOption = (port == 465)
+                var secureOption = (port == 465)
                     ? SecureSocketOptions.SslOnConnect
                     : SecureSocketOptions.StartTls;
 
-                await client.ConnectAsync(host, port, secureSocketOption);
+                Console.WriteLine($"[MAIL BAĞLANTI] {host}:{port} ({secureOption}) bağlanılıyor...");
+                await client.ConnectAsync(host, port, secureOption);
+
+                Console.WriteLine($"[MAIL DOĞRULAMA] Kimlik doğrulanıyor...");
                 await client.AuthenticateAsync(senderEmail, password);
+
+                Console.WriteLine($"[MAIL GÖNDERİLİYOR] Mesaj iletiliyor...");
                 await client.SendAsync(message);
                 await client.DisconnectAsync(true);
 
-                Console.WriteLine($"[BAŞARILI] Randevu onay e-postası iletildi -> {toEmail}");
+                Console.WriteLine($"[BAŞARILI] Randevu onay e-postası başarıyla iletildi -> {toEmail}");
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[UYARI] E-Posta gönderilirken SMTP hatası oluştu: {ex.Message}");
+                Console.WriteLine($"[MAIL HATA DETAYI] {ex.GetType().Name}: {ex.Message}");
             }
         }
     }

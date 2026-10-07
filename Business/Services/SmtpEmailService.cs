@@ -1,7 +1,11 @@
 ﻿using Business.Interfaces;
+using MailKit.Net.Smtp;
+using MailKit.Security;
 using Microsoft.Extensions.Configuration;
-using System.Net;
+using MimeKit;
+using System;
 using System.Net.Mail;
+using System.Threading.Tasks;
 
 namespace Business.Services
 {
@@ -17,45 +21,49 @@ namespace Business.Services
         public async Task SendEmailAsync(string toEmail, string subject, string htmlBody)
         {
             var host = _config["EmailSettings:Host"] ?? "smtp.gmail.com";
-            var port = int.Parse(_config["EmailSettings:Port"] ?? "587");
-            var senderEmail = _config["EmailSettings:Email"];
-            var password = _config["EmailSettings:Password"];
+            var portStr = _config["EmailSettings:Port"] ?? "465";
+            int port = int.TryParse(portStr, out int p) ? p : 465;
 
-            // 1. Eğer şifre veya mail girilmemişse / varsayılan test değeri duruyorsa randevuyu patlatma, es geç
+            // Render ortamındaki hem 'SenderEmail' hem de 'Email' anahtarlarını kontrol et
+            var senderEmail = _config["EmailSettings:SenderEmail"] ?? _config["EmailSettings:Email"];
+            var password = _config["EmailSettings:SenderPassword"] ?? _config["EmailSettings:Password"];
+
             if (string.IsNullOrWhiteSpace(senderEmail) ||
                 string.IsNullOrWhiteSpace(password) ||
                 password.Contains("xxxx") ||
                 senderEmail.Contains("seninmailin"))
             {
-                Console.WriteLine($"[BİLGİ] SMTP ayarları yapılmadığı için e-posta gönderimi es geçildi: {toEmail}");
+                Console.WriteLine($"[BİLGİ] SMTP ayarları eksik veya geçersiz olduğu için e-posta gönderimi es geçildi: {toEmail}");
                 return;
             }
 
-            // 2. SMTP Bağlantı Hatası Randevunun Kaydedilmesini Engellemesin (Try-Catch Koruması)
             try
             {
-                using var client = new SmtpClient(host, port)
-                {
-                    Credentials = new NetworkCredential(senderEmail, password),
-                    EnableSsl = true,
-                    Timeout = 8000 // 8 saniye içinde cevap alamazsa beklemesin
-                };
+                var message = new MimeMessage();
+                message.From.Add(new MailboxAddress("E-Klinik Randevu Sistemi", senderEmail));
+                message.To.Add(new MailboxAddress("", toEmail));
+                message.Subject = subject;
 
-                var mailMessage = new MailMessage
-                {
-                    From = new MailAddress(senderEmail, "E-Klinik Randevu Sistemi"),
-                    Subject = subject,
-                    Body = htmlBody,
-                    IsBodyHtml = true
-                };
-                mailMessage.To.Add(toEmail);
+                var bodyBuilder = new BodyBuilder { HtmlBody = htmlBody };
+                message.Body = bodyBuilder.ToMessageBody();
 
-                await client.SendMailAsync(mailMessage);
+                using var client = new SmtpClient();
+                client.Timeout = 10000; // 10 saniye
+
+                // Port 465 için doğrudan SSL, diğerleri için StartTls
+                var secureSocketOption = (port == 465)
+                    ? SecureSocketOptions.SslOnConnect
+                    : SecureSocketOptions.StartTls;
+
+                await client.ConnectAsync(host, port, secureSocketOption);
+                await client.AuthenticateAsync(senderEmail, password);
+                await client.SendAsync(message);
+                await client.DisconnectAsync(true);
+
                 Console.WriteLine($"[BAŞARILI] Randevu onay e-postası iletildi -> {toEmail}");
             }
             catch (Exception ex)
             {
-                // Mail gönderilemese bile hasta randevusunu almış olur, sistem çökmez
                 Console.WriteLine($"[UYARI] E-Posta gönderilirken SMTP hatası oluştu: {ex.Message}");
             }
         }

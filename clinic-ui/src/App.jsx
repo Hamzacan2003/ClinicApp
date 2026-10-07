@@ -86,7 +86,7 @@ export default function App() {
   // Randevu Sihirbazı State'leri
   const [doctors, setDoctors] = useState([]);
   const [selectedDoctor, setSelectedDoctor] = useState(null);
-  const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
+  const [selectedDate, setSelectedDate] = useState(new Date().toLocaleDateString('en-CA'));
   const [slots, setSlots] = useState([]);
   const [selectedSlot, setSelectedSlot] = useState(null);
   const [loadingSlots, setLoadingSlots] = useState(false);
@@ -106,7 +106,7 @@ export default function App() {
   // Panel Verileri
   const [dailyAppointments, setDailyAppointments] = useState([]);
   const [stats, setStats] = useState(null);
-  const [panelDate, setPanelDate] = useState(new Date().toISOString().split('T')[0]);
+  const [panelDate, setPanelDate] = useState(new Date().toLocaleDateString('en-CA'));
   const [staffList, setStaffList] = useState([]);
 
   // Muayene & Röntgen Modalı
@@ -126,7 +126,7 @@ export default function App() {
   const [doctorScheduleList, setDoctorScheduleList] = useState([]);
   const [timeOffList, setTimeOffList] = useState([]);
   const [newTimeOff, setNewTimeOff] = useState({
-    date: new Date().toISOString().split('T')[0],
+    date: new Date().toLocaleDateString('en-CA'),
     isAllDay: true,
     startTime: '13:00',
     endTime: '15:00',
@@ -176,7 +176,7 @@ export default function App() {
     if (selectedDoctor && selectedDate) fetchSlots(selectedDoctor.id, selectedDate);
   }, [selectedDoctor, selectedDate]);
 
-const fetchSlots = async (docId, dateStr) => {
+  const fetchSlots = async (docId, dateStr) => {
     setLoadingSlots(true);
     setSelectedSlot(null);
     try {
@@ -189,6 +189,7 @@ const fetchSlots = async (docId, dateStr) => {
     }
   };
 
+  // İstemci tarafı geçmiş saat kontrolü
   const isSlotInPast = (slotTimeStr) => {
     const todayStr = new Date().toLocaleDateString('en-CA'); 
     if (selectedDate !== todayStr) return false;
@@ -258,28 +259,27 @@ const fetchSlots = async (docId, dateStr) => {
     } catch {}
   };
 
-  // SignalR
-// SignalR Bağlantısı (Canlı Render Hub Adresi)
-useEffect(() => {
-  const connection = new signalR.HubConnectionBuilder()
-    .withUrl("https://clinic-api-bs2z.onrender.com/clinichub")
-    .withAutomaticReconnect()
-    .build();
+  // SignalR Canlı Hub Bağlantısı
+  useEffect(() => {
+    const connection = new signalR.HubConnectionBuilder()
+      .withUrl("https://clinic-api-bs2z.onrender.com/clinichub")
+      .withAutomaticReconnect()
+      .build();
 
-  connection.start().then(() => {
-    if (selectedDoctor) connection.invoke("JoinDoctorGroup", selectedDoctor.id);
-  }).catch(console.error);
+    connection.start().then(() => {
+      if (selectedDoctor) connection.invoke("JoinDoctorGroup", selectedDoctor.id);
+    }).catch(console.error);
 
-  connection.on("ReceiveNewAppointment", (data) => {
-    setNotification(`Yeni Randevu: ${data.patientName} (${data.time})`);
-    setTimeout(() => setNotification(null), 7000);
-    if (currentView === 'panel') loadPanelData();
-  });
+    connection.on("ReceiveNewAppointment", (data) => {
+      setNotification(`Yeni Randevu: ${data.patientName} (${data.time})`);
+      setTimeout(() => setNotification(null), 7000);
+      if (currentView === 'panel') loadPanelData();
+    });
 
-  return () => {
-    connection.stop();
-  };
-}, [selectedDoctor, currentView]);
+    return () => {
+      connection.stop();
+    };
+  }, [selectedDoctor, currentView]);
 
   // LOGIN & LOCALSTORAGE KAYDI (F5 KORUMASI)
   const handleLoginSubmit = async (e) => {
@@ -288,7 +288,7 @@ useEffect(() => {
     try {
       const res = await staffLogin(loginForm);
       setLoggedUser(res.data);
-      localStorage.setItem('clinic_user', JSON.stringify(res.data)); // HAFIZAYA YAZ
+      localStorage.setItem('clinic_user', JSON.stringify(res.data));
       setShowLoginModal(false);
       setCurrentView('panel');
     } catch (err) {
@@ -306,7 +306,7 @@ useEffect(() => {
   };
 
   const handleLogout = () => {
-    localStorage.removeItem('clinic_user'); // HAFIZADAN SİL
+    localStorage.removeItem('clinic_user');
     setLoggedUser(null);
     setCurrentView('public');
   };
@@ -436,13 +436,19 @@ useEffect(() => {
       const res = await chargeAppointment({
         appointmentId: chargingApp.id,
         paymentMethod: paymentMethod,
-        treatments: treatmentItems.map(t => ({ ...t, price: parseFloat(t.price) }))
+        treatments: treatmentItems.map(t => ({ procedureName: t.procedureName, price: parseFloat(t.price) || 0 }))
       });
       alert("Tahsilat ve işlemler başarıyla kaydedildi!");
       
       setDailyAppointments(prev => prev.map(a => 
         a.id === chargingApp.id 
-          ? { ...a, paymentStatus: 'Paid', paymentAmount: res.data.totalAmount, paymentMethod: paymentMethod }
+          ? { 
+              ...a, 
+              paymentStatus: 'Paid', 
+              paymentAmount: res.data.totalAmount, 
+              paymentMethod: paymentMethod,
+              treatmentDetails: res.data.treatmentSummary || treatmentItems.map(t => `${t.procedureName}: ${t.price} ₺`).join(' | ')
+            } 
           : a
       ));
 
@@ -551,9 +557,9 @@ useEffect(() => {
   const pendingAppointments = dailyAppointments.filter(a => !a.hasMedicalRecord);
   const completedAppointments = dailyAppointments.filter(a => a.hasMedicalRecord);
 
-const getFullImageUrl = (url) => {
+  // Base64 Data URL ve Uzak URL Kontrolü
+  const getFullImageUrl = (url) => {
     if (!url) return '';
-    // Eğer resim base64 (data:) veya zaten tam link ise dokunma
     if (url.startsWith('data:') || url.startsWith('http://') || url.startsWith('https://')) {
       return url;
     }
@@ -576,7 +582,7 @@ const getFullImageUrl = (url) => {
       )}
 
       {/* ========================================================================= */}
-      {/* 1. PUBLIC ANA SAYFA                                                      */}
+      {/* 1. PUBLIC ANA SAYFA                                                       */}
       {/* ========================================================================= */}
       {currentView === 'public' && (
         <div>
@@ -819,7 +825,7 @@ const getFullImageUrl = (url) => {
                   <input 
                     type="date" 
                     value={selectedDate}
-                    min={new Date().toISOString().split('T')[0]}
+                    min={new Date().toLocaleDateString('en-CA')}
                     onChange={(e) => setSelectedDate(e.target.value)}
                     className="w-full p-3 rounded-xl border border-slate-300 font-semibold text-sm outline-none"
                   />
@@ -835,28 +841,28 @@ const getFullImageUrl = (url) => {
                     </div>
                   ) : (
                     <div className="grid grid-cols-4 gap-2">
-                   {slots.map(slot => {
-  const isPast = isSlotInPast(slot.formattedTime);
-  const isAvailable = slot.isAvailable && !isPast;
+                      {slots.map(slot => {
+                        const isPast = isSlotInPast(slot.formattedTime);
+                        const isAvailable = slot.isAvailable && !isPast;
 
-  return (
-    <button
-      key={slot.formattedTime}
-      type="button"
-      disabled={!isAvailable}
-      onClick={() => setSelectedSlot(slot)}
-      className={`py-2 text-xs font-bold rounded-xl transition ${
-        !isAvailable
-          ? 'bg-slate-100 text-slate-400 cursor-not-allowed line-through'
-          : selectedSlot?.formattedTime === slot.formattedTime
-            ? 'bg-sky-600 text-white shadow-md'
-            : 'bg-slate-50 text-slate-700 border border-slate-200 hover:border-sky-500 hover:bg-sky-50'
-      }`}
-    >
-      {slot.formattedTime}
-    </button>
-  );
-})}
+                        return (
+                          <button
+                            key={slot.formattedTime}
+                            type="button"
+                            disabled={!isAvailable}
+                            onClick={() => setSelectedSlot(slot)}
+                            className={`py-2 text-xs font-bold rounded-xl transition ${
+                              !isAvailable
+                                ? 'bg-slate-100 text-slate-400 cursor-not-allowed line-through'
+                                : selectedSlot?.formattedTime === slot.formattedTime
+                                  ? 'bg-sky-600 text-white shadow-md'
+                                  : 'bg-slate-50 text-slate-700 border border-slate-200 hover:border-sky-500 hover:bg-sky-50'
+                            }`}
+                          >
+                            {slot.formattedTime}
+                          </button>
+                        );
+                      })}
                     </div>
                   )}
                 </div>
@@ -1154,7 +1160,7 @@ const getFullImageUrl = (url) => {
 
             <div className="p-8 overflow-y-auto space-y-8">
               
-              {/* TAB 1: GÜNLÜK MUAYENE İKİ AYRI LİSTE (BEKLEYENLER & BİTENLER) */}
+              {/* TAB 1: GÜNLÜK MUAYENE İKİ AYRI LİSTE */}
               {panelTab === 'appointments' && (
                 <div className="space-y-8">
                   
@@ -1237,7 +1243,7 @@ const getFullImageUrl = (url) => {
                     </div>
                   </div>
 
-                  {/* BÖLÜM 2: BUGÜN MUAYENESİ YAPILAN HASTALAR (DOĞRUDAN SATIRDA GÖRÜNÜR + EK İŞLEM / FATURA) */}
+                  {/* BÖLÜM 2: BUGÜN MUAYENESİ YAPILAN HASTALAR */}
                   <div className="bg-white rounded-3xl border border-slate-200 shadow-sm overflow-hidden">
                     <div className="p-6 border-b border-slate-100 flex items-center justify-between bg-emerald-50/40">
                       <div>
@@ -1319,12 +1325,21 @@ const getFullImageUrl = (url) => {
                               </div>
                             </div>
 
-                            {/* DOĞRUDAN SATIRDA GÖRÜNEN TANI, NOT, REÇETE VE DOSYALAR */}
+                            {/* DOĞRUDAN SATIRDA GÖRÜNEN TANI, NOT, REÇETE, DOSYALAR VE FATURA KALEMLERİ */}
                             <div className="p-4 rounded-2xl bg-emerald-50/60 border border-emerald-100 text-xs space-y-2">
                               <div>
                                 <span className="font-bold text-emerald-950">Teşhis / Tanı: </span>
                                 <span className="font-semibold text-emerald-900">{app.diagnosis || 'Tanı girilmedi'}</span>
                               </div>
+
+                              {/* KALICI FATURA VE YAPILAN İŞLEM DÖKÜMÜ */}
+                              {app.treatmentDetails && (
+                                <div className="p-2 bg-white/80 rounded-xl border border-emerald-200/60 flex items-center gap-2">
+                                  <span className="font-bold text-emerald-900 shrink-0">💳 Yapılan İşlemler / Fatura:</span>
+                                  <span className="font-semibold text-slate-700">{app.treatmentDetails}</span>
+                                </div>
+                              )}
+
                               {app.clinicalNotes ? (
                                 <div>
                                   <span className="font-bold text-slate-700">Hekim Muayene Notu: </span>
@@ -1333,6 +1348,7 @@ const getFullImageUrl = (url) => {
                               ) : (
                                 <div className="text-slate-400 italic">Muayene notu girilmedi.</div>
                               )}
+                              
                               {app.prescription ? (
                                 <div>
                                   <span className="font-bold text-emerald-800">Reçete / İlaçlar: </span>
@@ -1396,6 +1412,9 @@ const getFullImageUrl = (url) => {
                           <div>
                             <span className="font-bold text-slate-900">{tr.patientName}</span>
                             <span className="text-slate-400 ml-2 font-mono">{tr.time}</span>
+                            {tr.treatmentDetails && (
+                              <p className="text-[11px] text-slate-500 mt-0.5">{tr.treatmentDetails}</p>
+                            )}
                           </div>
                           <div className="flex items-center gap-4">
                             <span className="px-2.5 py-1 rounded-lg bg-white border border-slate-200 font-semibold">{tr.paymentMethod}</span>
@@ -1544,7 +1563,7 @@ const getFullImageUrl = (url) => {
                             type="date" 
                             required
                             value={newTimeOff.date}
-                            min={new Date().toISOString().split('T')[0]}
+                            min={new Date().toLocaleDateString('en-CA')}
                             onChange={(e) => setNewTimeOff({...newTimeOff, date: e.target.value})}
                             className="w-full p-2.5 rounded-xl border border-slate-300 text-xs font-bold bg-white"
                           />
@@ -1637,7 +1656,7 @@ const getFullImageUrl = (url) => {
                 </div>
               )}
 
-              {/* TAB 4: PERSONEL & SEKRETER YÖNETİMİ (YENİ EKLEME VE LİSTELEME) */}
+              {/* TAB 4: PERSONEL & SEKRETER YÖNETİMİ */}
               {panelTab === 'staff' && (
                 <div className="bg-white p-8 rounded-3xl border border-slate-200 shadow-sm space-y-6">
                   <div className="flex items-center justify-between">
@@ -1828,6 +1847,11 @@ const getFullImageUrl = (url) => {
                       <div key={rec.id} className="p-5 rounded-2xl border border-slate-200 bg-slate-50 space-y-2">
                         <span className="text-xs font-bold text-sky-700 bg-sky-100 px-2.5 py-1 rounded-lg">{rec.date}</span>
                         <p className="text-sm font-bold text-slate-900">Tanı: {rec.diagnosis}</p>
+                        {rec.treatmentDetails && (
+                          <p className="text-xs text-emerald-800 font-semibold bg-emerald-50 px-2.5 py-1 rounded-lg border border-emerald-200 inline-block">
+                            💳 Yapılan İşlemler: {rec.treatmentDetails} ({rec.paymentAmount} ₺)
+                          </p>
+                        )}
                         <p className="text-xs text-slate-600">Not: {rec.clinicalNotes}</p>
                         
                         {rec.attachments && rec.attachments.length > 0 && (
@@ -1837,7 +1861,7 @@ const getFullImageUrl = (url) => {
                                 key={idx} 
                                 href={getFullImageUrl(att.downloadUrl)} 
                                 target="_blank" 
-                                rel="noreferrer"
+                                rel="noreferrer" 
                                 className="flex items-center gap-1.5 px-3 py-1.5 bg-white border border-slate-300 rounded-xl text-xs font-semibold text-sky-600 hover:bg-sky-50"
                               >
                                 <Eye className="w-3.5 h-3.5" /> Resmi / Raporu Aç ({att.originalFileName})
@@ -1996,7 +2020,7 @@ const getFullImageUrl = (url) => {
       )}
 
       {/* ========================================================================= */}
-      {/* 4. HASTA ESKİ GEÇMİŞİ MODALI (DOKTOR İÇİN HIZLI GEÇMİŞ İNCELEME)          */}
+      {/* 4. HASTA ESKİ GEÇMİŞİ MODALI                                              */}
       {/* ========================================================================= */}
       {activeHistoryModalPatient && (
         <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
@@ -2020,6 +2044,9 @@ const getFullImageUrl = (url) => {
                       <span className="text-slate-500">{rec.doctor}</span>
                     </div>
                     <p><b className="text-slate-800">Teşhis:</b> {rec.diagnosis}</p>
+                    {rec.treatmentDetails && (
+                      <p><b className="text-slate-800">Uygulanan Tedavi & Ücret:</b> <span className="text-emerald-700 font-semibold">{rec.treatmentDetails} ({rec.paymentAmount} ₺)</span></p>
+                    )}
                     {rec.clinicalNotes && <p><b className="text-slate-800">Not:</b> {rec.clinicalNotes}</p>}
                     {rec.prescription && (
                       <p><b className="text-slate-800">Reçete:</b> <span className="font-mono text-emerald-700 bg-white px-2 py-0.5 rounded border border-slate-200">{rec.prescription}</span></p>

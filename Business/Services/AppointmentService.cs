@@ -6,6 +6,10 @@ using DataAccess.Entities;
 using DataAccess.Enums;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Threading.Tasks;
 
 namespace Business.Services
 {
@@ -56,10 +60,10 @@ namespace Business.Services
                 .Select(a => a.SlotTime)
                 .ToListAsync();
 
-            // 4. Bugünün geçmiş saat kontrolü
-            var nowLocal = DateTime.Now;
-            bool isToday = (date.Date == nowLocal.Date);
-            var currentTimeOfDay = nowLocal.TimeOfDay;
+            // 4. Türkiye saatine göre geçmiş saat kontrolü (Render UTC olduğu için +3 saat eklenir)
+            var turkeyNow = DateTime.UtcNow.AddHours(3);
+            bool isToday = (date.Date == turkeyNow.Date);
+            var currentTimeOfDay = turkeyNow.TimeOfDay;
 
             // 5. Slotları üret
             var slots = new List<TimeSlotDto>();
@@ -73,6 +77,7 @@ namespace Business.Services
                 bool isBlocked = timeOffs.Any(t => t.StartTime.HasValue && t.EndTime.HasValue &&
                                                    current >= t.StartTime.Value && current < t.EndTime.Value);
 
+                // Bugün seçiliyse ve slot saati şu anki Türkiye saatinden geride kalmışsa kapat
                 bool isPastTime = isToday && (current <= currentTimeOfDay);
 
                 bool available = !isBooked && !isBlocked && !isPastTime;
@@ -102,7 +107,7 @@ namespace Business.Services
                 return (false, "Girilen T.C. Kimlik No, Ad, Soyad veya Doğum Yılı Nüfus Müdürlüğü kayıtlarıyla uyuşmuyor!", null);
             }
 
-            // Tarihleri kesin olarak UTC'ye dönüştürüyoruz (Npgsql Hatasını Önler)
+            // Tarihleri UTC'ye dönüştürüyoruz
             var utcAppointmentDate = DateTime.SpecifyKind(dto.AppointmentDate.Date, DateTimeKind.Utc);
 
             // 2. Çakışma Kontrolü
@@ -126,7 +131,7 @@ namespace Business.Services
                     LastName = dto.LastName.Trim(),
                     Email = dto.Email.Trim(),
                     PhoneNumber = dto.PhoneNumber.Trim(),
-                    DateOfBirth = DateTime.SpecifyKind(new DateTime(dto.BirthYear, 1, 1), DateTimeKind.Utc), // UTC DÜZELTİLDİ
+                    DateOfBirth = DateTime.SpecifyKind(new DateTime(dto.BirthYear, 1, 1), DateTimeKind.Utc),
                     CreatedAt = DateTime.UtcNow
                 };
                 _context.Patients.Add(patient);
@@ -141,7 +146,7 @@ namespace Business.Services
             {
                 DoctorId = dto.DoctorId,
                 PatientId = patient.Id,
-                AppointmentDate = utcAppointmentDate, // UTC DÜZELTİLDİ
+                AppointmentDate = utcAppointmentDate,
                 SlotTime = dto.SlotTime,
                 PatientComplaint = dto.PatientComplaint,
                 Status = AppointmentStatus.Pending,

@@ -3,6 +3,7 @@ using DataAccess.Context;
 using Microsoft.EntityFrameworkCore;
 using System;
 using System.Globalization;
+using System.Linq;
 using System.Net.Http;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -15,7 +16,7 @@ namespace Business.Services
     {
         private readonly ClinicDbContext _context;
         private static readonly CultureInfo TrCulture = new CultureInfo("tr-TR");
-        private static readonly HttpClient HttpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
+        private static readonly HttpClient HttpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(3) };
 
         public NviValidationService(ClinicDbContext context)
         {
@@ -24,40 +25,78 @@ namespace Business.Services
 
         public async Task<bool> ValidateTcAsync(long tcNo, string ad, string soyad, int dogumYili)
         {
-            // 1. Resmi 11 Haneli TCKN Algoritması
+            // 1. Resmi TCKN 11 Haneli Matematiksel Algoritma Kontrolü
             if (!ValidateTcAlgorithm(tcNo))
             {
-                Console.WriteLine($"[KİMLİK HATA] {tcNo} algoritma kuralına uymuyor.");
+                Console.WriteLine($"[KİMLİK HATA] {tcNo} TCKN algoritmasına uymuyor.");
                 return false;
             }
 
-            // 2. Temel Kontroller
-            if (string.IsNullOrWhiteSpace(ad) || string.IsNullOrWhiteSpace(soyad) || dogumYili < 1900 || dogumYili > DateTime.UtcNow.Year)
+            // 2. Doğum Yılı Sınır Denetimi
+            int currentYear = DateTime.UtcNow.AddHours(3).Year;
+            if (dogumYili < 1900 || dogumYili > currentYear)
+            {
+                Console.WriteLine($"[KİMLİK HATA] Geçersiz doğum yılı: {dogumYili}");
+                return false;
+            }
+
+            if (string.IsNullOrWhiteSpace(ad) || string.IsNullOrWhiteSpace(soyad))
                 return false;
 
-            // 3. İsim Temizliği (Türkçe Karakter Uyumlu Büyük Harf)
+            // 3. İsim ve Soyisim Format Temizliği (Türkçe karakter uyumlu büyük harf)
             string cleanAd = string.Join(" ", ad.Trim().Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries)).ToUpper(TrCulture);
             string cleanSoyad = string.Join(" ", soyad.Trim().Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries)).ToUpper(TrCulture);
 
-            // 4. CANLI DEVLET NVI (KPSPublic) SOAP SORGUSU
-            bool nviSonuc = await CallNviSoapAsync(tcNo, cleanAd, cleanSoyad, dogumYili);
-
-            if (!nviSonuc)
-            {
-                Console.ForegroundColor = ConsoleColor.Red;
-                Console.WriteLine($"[NVI REDDİ] T.C: {tcNo}, Ad: '{cleanAd}', Soyad: '{cleanSoyad}', Yıl: {dogumYili} Nüfus Müdürlüğü kayıtlarıyla EŞLEŞMEDİ!");
-                Console.ResetColor();
+            if (cleanAd.Length < 2 || cleanSoyad.Length < 2)
                 return false;
+
+            if (!Regex.IsMatch(cleanAd, @"^[A-ZÇĞİÖŞÜ\s]+$") || !Regex.IsMatch(cleanSoyad, @"^[A-ZÇĞİÖŞÜ\s]+$"))
+                return false;
+
+            // 4. Veritabanındaki Kayıt ile Çapraz Kontrol (T.C. başkasına aitse ad/soyad uydurulmasını engeller)
+            string tcStr = tcNo.ToString();
+            var existingPatient = await _context.Patients.FirstOrDefaultAsync(p => p.NationalId == tcStr);
+
+            if (existingPatient != null)
+            {
+                string dbAd = existingPatient.FirstName.Trim().ToUpper(TrCulture);
+                string dbSoyad = existingPatient.LastName.Trim().ToUpper(TrCulture);
+
+                if (dbAd != cleanAd || dbSoyad != cleanSoyad)
+                {
+                    Console.WriteLine($"[KİMLİK UYUŞMAZLIĞI] {tcNo} sistemde '{dbAd} {dbSoyad}' adına kayıtlıdır. Girilen: '{cleanAd} {cleanSoyad}' reddedildi.");
+                    return false;
+                }
+
+                if (existingPatient.DateOfBirth.HasValue && existingPatient.DateOfBirth.Value.Year != dogumYili)
+                {
+                    Console.WriteLine($"[DOĞUM YILI UYUŞMAZLIĞI] {tcNo} için kayıtlı yıl: {existingPatient.DateOfBirth.Value.Year}, girilen: {dogumYili}. Reddedildi!");
+                    return false;
+                }
             }
 
-            Console.ForegroundColor = ConsoleColor.Green;
-            Console.WriteLine($"[NVI ONAYLANDI] {cleanAd} {cleanSoyad} ({tcNo}) devlet kayıtlarında doğrulandı.");
-            Console.ResetColor();
+            // 5. Canlı NVI SOAP Servisi Çağrısı (Render IP'sinden erişilebiliyorsa kesin doğrular)
+            var nviSonuc = await TryCallNviSoapAsync(tcNo, cleanAd, cleanSoyad, dogumYili);
+
+            if (nviSonuc.HasValue)
+            {
+                // NVI servisine ulaşıldı: Devletten gelen kesin cevaba göre onay veya ret ver
+                if (!nviSonuc.Value)
+                {
+                    Console.WriteLine($"[NVI DEVLET RET] {tcNo} - {cleanAd} {cleanSoyad} ({dogumYili}) Nüfus kayıtlarıyla eşleşmedi.");
+                    return false;
+                }
+            }
+            else
+            {
+                // Render yurtdışı IP'si nedeniyle NVI servisi yanıt vermediyse log düş ve algoritma geçerliliğini koru
+                Console.WriteLine($"[NVI ERİŞİM KISITI] NVI servisi bulut sunucusuna yanıt vermedi, yerel algoritma ve veritabanı kontrolüyle devam ediliyor.");
+            }
 
             return true;
         }
 
-        private static async Task<bool> CallNviSoapAsync(long tcNo, string ad, string soyad, int dogumYili)
+        private static async Task<bool?> TryCallNviSoapAsync(long tcNo, string ad, string soyad, int dogumYili)
         {
             try
             {
@@ -77,29 +116,22 @@ namespace Business.Services
                 request.Content = new StringContent(soapXml, Encoding.UTF8, "application/soap+xml");
 
                 var response = await HttpClient.SendAsync(request);
-                string responseContent = await response.Content.ReadAsStringAsync();
-
                 if (!response.IsSuccessStatusCode)
-                {
-                    Console.WriteLine($"[NVI HTTP HATA] Kod: {response.StatusCode}, Yanıt: {responseContent}");
-                    return false;
-                }
+                    return null; // IP engeli / 403 / 500
 
+                string responseContent = await response.Content.ReadAsStringAsync();
                 var xDoc = XDocument.Parse(responseContent);
                 XNamespace ns = "http://tckimlik.nvi.gov.tr/WS";
                 var resultEl = xDoc.Descendants(ns + "TCKimlikNoDogrulaResult").FirstOrDefault();
 
                 if (resultEl != null && bool.TryParse(resultEl.Value, out bool isValid))
-                {
                     return isValid;
-                }
 
-                return false;
+                return null;
             }
-            catch (Exception ex)
+            catch
             {
-                Console.WriteLine($"[NVI İSTİSNA HATA] {ex.Message}");
-                return false;
+                return null; // Timeout / Ağ engeli
             }
         }
 

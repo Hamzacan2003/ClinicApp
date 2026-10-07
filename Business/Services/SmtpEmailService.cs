@@ -1,16 +1,18 @@
 ﻿using Business.Interfaces;
-using MailKit.Security;
 using Microsoft.Extensions.Configuration;
-using MimeKit;
 using System;
+using System.Net.Http;
+using System.Net.Http.Headers;
+using System.Text;
+using System.Text.Json;
 using System.Threading.Tasks;
-// DİKKAT: 'using System.Net.Mail;' kaldırıldı!
 
 namespace Business.Services
 {
     public class SmtpEmailService : IEmailService
     {
         private readonly IConfiguration _config;
+        private static readonly HttpClient HttpClient = new HttpClient();
 
         public SmtpEmailService(IConfiguration config)
         {
@@ -19,55 +21,42 @@ namespace Business.Services
 
         public async Task SendEmailAsync(string toEmail, string subject, string htmlBody)
         {
-            var host = _config["EmailSettings:Host"] ?? "smtp.gmail.com";
-            var portStr = _config["EmailSettings:Port"] ?? "465";
-            int port = int.TryParse(portStr, out int p) ? p : 465;
+            // Render Environment'tan veya appsettings'ten API Key'i al
+            var apiKey = _config["Resend:ApiKey"] ?? _config["Resend__ApiKey"];
 
-            var senderEmail = _config["EmailSettings:SenderEmail"]
-                           ?? _config["EmailSettings:Email"]
-                           ?? _config["EmailSettings__SenderEmail"];
-
-            var password = _config["EmailSettings:SenderPassword"]
-                        ?? _config["EmailSettings:Password"]
-                        ?? _config["EmailSettings__SenderPassword"];
-
-            Console.WriteLine($"[MAIL TEST] Host: {host}, Port: {port}, Gönderen: {senderEmail}, Alıcı: {toEmail}");
-
-            if (string.IsNullOrWhiteSpace(senderEmail) || string.IsNullOrWhiteSpace(password))
+            if (string.IsNullOrWhiteSpace(apiKey))
             {
-                Console.WriteLine($"[MAIL UYARI] SenderEmail veya Password boş geldiği için gönderim iptal edildi!");
+                Console.WriteLine($"[MAIL UYARI] Resend API Key bulunamadığı için e-posta gönderimi es geçildi.");
                 return;
             }
 
             try
             {
-                var message = new MimeMessage();
-                message.From.Add(new MailboxAddress("E-Klinik Randevu Sistemi", senderEmail));
-                message.To.Add(new MailboxAddress("", toEmail));
-                message.Subject = subject;
+                Console.WriteLine($"[MAIL GÖNDERİLİYOR] Resend HTTPS API üzerinden {toEmail} adresine iletiliyor...");
 
-                var bodyBuilder = new BodyBuilder { HtmlBody = htmlBody };
-                message.Body = bodyBuilder.ToMessageBody();
+                var payload = new
+                {
+                    from = "E-Klinik <onboarding@resend.dev>",
+                    to = new[] { toEmail },
+                    subject = subject,
+                    html = htmlBody
+                };
 
-                // Çakışmayı önlemek için tam adresiyle (MailKit.Net.Smtp.SmtpClient) oluşturuyoruz
-                using var client = new MailKit.Net.Smtp.SmtpClient();
-                client.Timeout = 10000;
+                using var request = new HttpRequestMessage(HttpMethod.Post, "https://api.resend.com/emails");
+                request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
+                request.Content = new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json");
 
-                var secureOption = (port == 465)
-                    ? SecureSocketOptions.SslOnConnect
-                    : SecureSocketOptions.StartTls;
+                using var response = await HttpClient.SendAsync(request);
+                var responseContent = await response.Content.ReadAsStringAsync();
 
-                Console.WriteLine($"[MAIL BAĞLANTI] {host}:{port} ({secureOption}) bağlanılıyor...");
-                await client.ConnectAsync(host, port, secureOption);
-
-                Console.WriteLine($"[MAIL DOĞRULAMA] Kimlik doğrulanıyor...");
-                await client.AuthenticateAsync(senderEmail, password);
-
-                Console.WriteLine($"[MAIL GÖNDERİLİYOR] Mesaj iletiliyor...");
-                await client.SendAsync(message);
-                await client.DisconnectAsync(true);
-
-                Console.WriteLine($"[BAŞARILI] Randevu onay e-postası başarıyla iletildi -> {toEmail}");
+                if (response.IsSuccessStatusCode)
+                {
+                    Console.WriteLine($"[BAŞARILI] Randevu onay e-postası iletildi -> {toEmail}");
+                }
+                else
+                {
+                    Console.WriteLine($"[MAIL HTTP HATA] Kod: {response.StatusCode}, Detay: {responseContent}");
+                }
             }
             catch (Exception ex)
             {

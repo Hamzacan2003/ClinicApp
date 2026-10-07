@@ -250,24 +250,27 @@ export default function App() {
   };
 
   // SignalR
-  useEffect(() => {
-    const connection = new signalR.HubConnectionBuilder()
-      .withUrl("http://localhost:5030/clinichub")
-      .withAutomaticReconnect()
-      .build();
+// SignalR Bağlantısı (Canlı Render Hub Adresi)
+useEffect(() => {
+  const connection = new signalR.HubConnectionBuilder()
+    .withUrl("https://clinic-api-bs2z.onrender.com/clinichub")
+    .withAutomaticReconnect()
+    .build();
 
-    connection.start().then(() => {
-      if (selectedDoctor) connection.invoke("JoinDoctorGroup", selectedDoctor.id);
-    }).catch(console.error);
+  connection.start().then(() => {
+    if (selectedDoctor) connection.invoke("JoinDoctorGroup", selectedDoctor.id);
+  }).catch(console.error);
 
-    connection.on("ReceiveNewAppointment", (data) => {
-      setNotification(`Yeni Randevu: ${data.patientName} (${data.time})`);
-      setTimeout(() => setNotification(null), 7000);
-      if (currentView === 'panel') loadPanelData();
-    });
+  connection.on("ReceiveNewAppointment", (data) => {
+    setNotification(`Yeni Randevu: ${data.patientName} (${data.time})`);
+    setTimeout(() => setNotification(null), 7000);
+    if (currentView === 'panel') loadPanelData();
+  });
 
-    return () => connection.stop();
-  }, [selectedDoctor, currentView]);
+  return () => {
+    connection.stop();
+  };
+}, [selectedDoctor, currentView]);
 
   // LOGIN & LOCALSTORAGE KAYDI (F5 KORUMASI)
   const handleLoginSubmit = async (e) => {
@@ -539,11 +542,11 @@ export default function App() {
   const pendingAppointments = dailyAppointments.filter(a => !a.hasMedicalRecord);
   const completedAppointments = dailyAppointments.filter(a => a.hasMedicalRecord);
 
-  const getFullImageUrl = (url) => {
-    if (!url) return '';
-    if (url.startsWith('http://') || url.startsWith('https://')) return url;
-    return `http://localhost:5030${url}`;
-  };
+const getFullImageUrl = (url) => {
+  if (!url) return '';
+  if (url.startsWith('http://') || url.startsWith('https://')) return url;
+  return `https://clinic-api-bs2z.onrender.com${url}`;
+};
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-800">

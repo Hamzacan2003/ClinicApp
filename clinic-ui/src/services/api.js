@@ -1,10 +1,31 @@
 import axios from 'axios';
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5030';
+// Vercel Environment Variable üzerinden veya canlı Render API adresi
+const API_BASE_URL = import.meta.env.VITE_API_URL || 'https://clinic-api-bs2z.onrender.com/api';
 
 const api = axios.create({
   baseURL: API_BASE_URL,
 });
+
+// 401 Hatasını Çözen Interceptor: Kayıtlı JWT token'ı isteklere otomatik ekler
+api.interceptors.request.use(
+  (config) => {
+    const userStr = localStorage.getItem('clinic_user');
+    if (userStr) {
+      try {
+        const user = JSON.parse(userStr);
+        const token = user?.token || user?.accessToken || user?.data?.token;
+        if (token) {
+          config.headers.Authorization = `Bearer ${token}`;
+        }
+      } catch (err) {
+        console.error("Token okuma hatası:", err);
+      }
+    }
+    return config;
+  },
+  (error) => Promise.reject(error)
+);
 
 export const getDoctors = () => api.get('/Doctors');
 export const staffLogin = (data) => api.post('/Doctors/login', data);
@@ -29,7 +50,7 @@ export const addMedicalRecord = (formData) =>
 export const getPatientHistory = (nationalId) => 
   api.get(`/DoctorPanel/patient-history/${nationalId}`);
 
-// YENİ EK GELİŞMİŞ SERVİSLER
+// Ek Gelişmiş Servisler
 export const forgotPassword = (email) => api.post('/StaffManagement/forgot-password', { email });
 export const resetPassword = (data) => api.post('/StaffManagement/reset-password', data);
 export const changePassword = (data) => api.post('/StaffManagement/change-password', data);

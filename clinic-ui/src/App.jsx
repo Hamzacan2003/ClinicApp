@@ -1384,23 +1384,27 @@ export default function App() {
                 </div>
               )}
 
-              {/* TAB 2: KASA VE CİRO */}
+             {/* TAB 2: KASA VE CİRO (4 KART: TOPLAM, NAKİT, KREDİ KARTI, HAVALE/EFT) */}
               {panelTab === 'revenue' && dailyRevenueData && (
                 <div className="bg-white p-8 rounded-3xl border border-slate-200 shadow-sm space-y-6">
                   <h3 className="font-extrabold text-base text-slate-900">{panelDate} Kasa Raporu</h3>
 
-                  <div className="grid grid-cols-3 gap-6">
-                    <div className="bg-emerald-50 p-6 rounded-2xl border border-emerald-100">
-                      <span className="text-xs font-bold text-emerald-800 uppercase">Toplam Ciro</span>
-                      <h2 className="text-3xl font-black text-emerald-800 mt-2">{dailyRevenueData.totalRevenue} ₺</h2>
+                  <div className="grid grid-cols-4 gap-4">
+                    <div className="bg-emerald-50 p-5 rounded-2xl border border-emerald-100">
+                      <span className="text-[11px] font-bold text-emerald-800 uppercase">Toplam Ciro</span>
+                      <h2 className="text-2xl font-black text-emerald-800 mt-2">{dailyRevenueData.totalRevenue} ₺</h2>
                     </div>
-                    <div className="bg-sky-50 p-6 rounded-2xl border border-sky-100">
-                      <span className="text-xs font-bold text-sky-800 uppercase">Nakit</span>
-                      <h2 className="text-3xl font-black text-sky-800 mt-2">{dailyRevenueData.totalCash} ₺</h2>
+                    <div className="bg-sky-50 p-5 rounded-2xl border border-sky-100">
+                      <span className="text-[11px] font-bold text-sky-800 uppercase">Nakit</span>
+                      <h2 className="text-2xl font-black text-sky-800 mt-2">{dailyRevenueData.totalCash} ₺</h2>
                     </div>
-                    <div className="bg-purple-50 p-6 rounded-2xl border border-purple-100">
-                      <span className="text-xs font-bold text-purple-800 uppercase">Kredi Kartı</span>
-                      <h2 className="text-3xl font-black text-purple-800 mt-2">{dailyRevenueData.totalCard} ₺</h2>
+                    <div className="bg-purple-50 p-5 rounded-2xl border border-purple-100">
+                      <span className="text-[11px] font-bold text-purple-800 uppercase">Kredi Kartı</span>
+                      <h2 className="text-2xl font-black text-purple-800 mt-2">{dailyRevenueData.totalCard} ₺</h2>
+                    </div>
+                    <div className="bg-amber-50 p-5 rounded-2xl border border-amber-100">
+                      <span className="text-[11px] font-bold text-amber-800 uppercase">Havale / EFT</span>
+                      <h2 className="text-2xl font-black text-amber-800 mt-2">{dailyRevenueData.totalTransfer || 0} ₺</h2>
                     </div>
                   </div>
 

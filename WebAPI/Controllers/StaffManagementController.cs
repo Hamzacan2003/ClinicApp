@@ -225,20 +225,18 @@ namespace WebAPI.Controllers
                 return BadRequest(new { message = "Hekim silinirken bir hata oluştu: " + ex.Message });
             }
         }
-        // TAHSİLAT & ÇOKLU İŞLEM EKLEME (KÜMÜLATİF TUTAR GÜNCELLEMESİ)
+        // TAHSİLAT & ÇOKLU İŞLEM EKLEME (KASAYI VE TOPLAMI KÜMÜLATİF GÜNCELLEME)
         [HttpPost("charge-appointment")]
         public async Task<IActionResult> ChargeAppointment([FromBody] ChargeRequest req)
         {
             var appointment = await _context.Appointments
                 .Include(a => a.Payment)
+                .Include(a => a.Doctor)
                 .FirstOrDefaultAsync(a => a.Id == req.AppointmentId);
 
             if (appointment == null) return NotFound(new { message = "Randevu bulunamadı." });
 
-            decimal additionalAmount = 0;
-            var summaryList = new List<string>();
-
-            // Yeni eklenen işlemleri AppointmentTreatments tablosuna ekle
+            // 1. Yeni eklenen kalemleri AppointmentTreatments tablosuna kaydet
             foreach (var item in req.Treatments)
             {
                 _context.AppointmentTreatments.Add(new AppointmentTreatment
@@ -248,21 +246,34 @@ namespace WebAPI.Controllers
                     Price = item.Price,
                     CreatedAt = DateTime.UtcNow
                 });
-                additionalAmount += item.Price;
-                summaryList.Add($"{item.ProcedureName}: {item.Price} ₺");
+            }
+            await _context.SaveChangesAsync();
+
+            // 2. Randevuya ait İLK GÜNDEN İTİBAREN eklenen TÜM işlemleri veritabanından çek
+            var allTreatments = await _context.AppointmentTreatments
+                .Where(t => t.AppointmentId == req.AppointmentId)
+                .ToListAsync();
+
+            // 3. KASA İÇİN GERÇEK KÜMÜLATİF TOPLAM HESAPLA (3500 + 500 + 100100 = 104100)
+            decimal grandTotal = allTreatments.Sum(t => t.Price);
+
+            // Eğer daha önce hiç işlem eklenmemişse ve hasta muayene ücreti varsa onu da dahil et
+            if (grandTotal == 0 && appointment.Payment != null)
+            {
+                grandTotal = appointment.Payment.Amount;
             }
 
-            string newTreatmentSummary = string.Join(" | ", summaryList);
+            string allSummary = string.Join(" | ", allTreatments.Select(t => $"{t.ProcedureName}: {t.Price} ₺"));
 
             if (appointment.Payment == null)
             {
                 appointment.Payment = new Payment
                 {
                     AppointmentId = req.AppointmentId,
-                    Amount = additionalAmount,
+                    Amount = grandTotal,
                     PaymentMethod = req.PaymentMethod,
                     Status = DataAccess.Enums.PaymentStatus.Paid,
-                    TransactionReference = newTreatmentSummary,
+                    TransactionReference = allSummary,
                     PaidAt = DateTime.UtcNow,
                     CreatedAt = DateTime.UtcNow
                 };
@@ -270,21 +281,20 @@ namespace WebAPI.Controllers
             }
             else
             {
-                // ÖNEMLİ DÜZELTME: Eski tutarın üstüne yeni tutarı ekle (+), ezme!
-                appointment.Payment.Amount += additionalAmount;
+                // ÖNEMLİ: Kasa tutarını son eklenenle ezmiyoruz, tüm işlemlerin toplamı (104.100 ₺) yapıyoruz!
+                appointment.Payment.Amount = grandTotal;
                 appointment.Payment.PaymentMethod = req.PaymentMethod;
                 appointment.Payment.Status = DataAccess.Enums.PaymentStatus.Paid;
-                appointment.Payment.TransactionReference = string.IsNullOrWhiteSpace(appointment.Payment.TransactionReference)
-                    ? newTreatmentSummary
-                    : $"{appointment.Payment.TransactionReference} | {newTreatmentSummary}";
+                appointment.Payment.TransactionReference = allSummary;
                 appointment.Payment.PaidAt = DateTime.UtcNow;
             }
 
             await _context.SaveChangesAsync();
+
             return Ok(new
             {
-                message = "Tahsilat ve işlemler başarıyla kaydedildi!",
-                totalAmount = appointment.Payment.Amount, // Toplam birikmiş tutar (3500 + 500 = 4000)
+                message = "Tahsilat başarıyla kaydedildi!",
+                totalAmount = appointment.Payment.Amount, // Kasaya ve ön yüze 104.100 ₺ döner
                 treatmentSummary = appointment.Payment.TransactionReference,
                 status = "Paid"
             });

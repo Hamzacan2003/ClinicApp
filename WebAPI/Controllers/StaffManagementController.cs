@@ -226,12 +226,12 @@ namespace WebAPI.Controllers
                 return BadRequest(new { message = "Hekim silinirken bir hata oluştu: " + ex.Message });
             }
         }
-        // TAHSİLAT & ÇOKLU İŞLEM EKLEME (HER ÖDEMEYİ AYRI KASA HAREKETİ OLARAK KAYDEDER)
+        // TAHSİLAT & ÇOKLU İŞLEM EKLEME (500 HATASIZ & YÖNTEM BAZLI DÖKÜM)
         [HttpPost("charge-appointment")]
         public async Task<IActionResult> ChargeAppointment([FromBody] ChargeRequest req)
         {
             var appointment = await _context.Appointments
-                .Include(a => a.Doctor)
+                .Include(a => a.Payment)
                 .FirstOrDefaultAsync(a => a.Id == req.AppointmentId);
 
             if (appointment == null) return NotFound(new { message = "Randevu bulunamadı." });
@@ -239,7 +239,7 @@ namespace WebAPI.Controllers
             decimal batchTotal = 0;
             var summaryList = new List<string>();
 
-            // 1. Kalemleri kaydet
+            // 1. İşlem kalemlerini kaydet
             foreach (var item in req.Treatments)
             {
                 _context.AppointmentTreatments.Add(new AppointmentTreatment
@@ -254,42 +254,65 @@ namespace WebAPI.Controllers
             }
             await _context.SaveChangesAsync();
 
-            string batchSummary = string.Join(" | ", summaryList);
+            // Format: [Nakit: 10000 ₺ | İşlemler: ...]
+            string thisBatchEntry = $"[{req.PaymentMethod}: {batchTotal} ₺ -> {string.Join(", ", summaryList)}]";
 
-            // 2. ÖNEMLİ: Mevcut Payment'ı EZMEK YERİNE her tahsilat için bağımsız yeni hareket oluşturuyoruz
-            var newPayment = new Payment
+            // 2. 1'e 1 ilişkiyi bozmamak için var olan Payment nesnesini güncelliyoruz (Unique hatası kalkar)
+            if (appointment.Payment == null)
             {
-                AppointmentId = req.AppointmentId,
-                Amount = batchTotal,
-                PaymentMethod = req.PaymentMethod, // O anki seçim: Nakit, Kredi Kartı veya Havale / EFT
-                Status = DataAccess.Enums.PaymentStatus.Paid,
-                TransactionReference = batchSummary,
-                PaidAt = DateTime.UtcNow,
-                CreatedAt = DateTime.UtcNow
-            };
-            _context.Payments.Add(newPayment);
+                appointment.Payment = new Payment
+                {
+                    AppointmentId = req.AppointmentId,
+                    Amount = batchTotal,
+                    PaymentMethod = req.PaymentMethod,
+                    Status = DataAccess.Enums.PaymentStatus.Paid,
+                    TransactionReference = thisBatchEntry,
+                    PaidAt = DateTime.UtcNow,
+                    CreatedAt = DateTime.UtcNow
+                };
+                _context.Payments.Add(appointment.Payment);
+            }
+            else
+            {
+                // Toplam tutarı kümülatif artır
+                appointment.Payment.Amount += batchTotal;
+
+                // Birden fazla yöntem kullanıldıysa Karma, yoksa yöntemi yaz
+                if (appointment.Payment.PaymentMethod != req.PaymentMethod && !appointment.Payment.PaymentMethod.Contains("Karma"))
+                {
+                    appointment.Payment.PaymentMethod = "Karma (" + appointment.Payment.PaymentMethod + " + " + req.PaymentMethod + ")";
+                }
+
+                appointment.Payment.Status = DataAccess.Enums.PaymentStatus.Paid;
+                appointment.Payment.TransactionReference = string.IsNullOrWhiteSpace(appointment.Payment.TransactionReference)
+                    ? thisBatchEntry
+                    : $"{appointment.Payment.TransactionReference} | {thisBatchEntry}";
+                appointment.Payment.PaidAt = DateTime.UtcNow;
+            }
 
             appointment.Status = AppointmentStatus.Confirmed;
             await _context.SaveChangesAsync();
 
-            // 3. Randevunun tüm işlemlerinin kümülatif toplamını hesapla
+            // 3. Ön yüze güncel dökümü dön
             var allTreatments = await _context.AppointmentTreatments
                 .Where(t => t.AppointmentId == req.AppointmentId)
                 .ToListAsync();
 
             decimal grandTotal = allTreatments.Sum(t => t.Price);
+            if (grandTotal == 0) grandTotal = appointment.Payment.Amount;
+
             string allSummary = string.Join(" | ", allTreatments.Select(t => $"{t.ProcedureName}: {t.Price} ₺"));
 
             return Ok(new
             {
-                message = "Tahsilat ve işlemler başarıyla kaydedildi!",
+                message = "Tahsilat başarıyla kaydedildi!",
                 totalAmount = grandTotal,
                 treatmentSummary = allSummary,
                 status = "Paid"
             });
         }
 
-        // GÜNLÜK CİRO RAPORU (NAKİT, KREDİ KARTI VE HAVALE / EFT AYRIMI)
+        // GÜNLÜK CİRO RAPORU (NAKİT, KREDİ KARTI VE HAVALE / EFT'Yİ AYRI AYRI PARSE EDER)
         [HttpGet("daily-revenue")]
         public async Task<IActionResult> GetDailyRevenue([FromQuery] DateTime date)
         {
@@ -302,29 +325,63 @@ namespace WebAPI.Controllers
                             p.PaidAt.Value.Date == targetDate.Date &&
                             p.Status == DataAccess.Enums.PaymentStatus.Paid)
                 .OrderByDescending(p => p.PaidAt)
-                .Select(p => new
-                {
-                    p.Id,
-                    PatientName = $"{p.Appointment.Patient.FirstName} {p.Appointment.Patient.LastName}",
-                    p.Amount,
-                    p.PaymentMethod,
-                    TreatmentDetails = p.TransactionReference ?? "Genel Muayene",
-                    Time = p.PaidAt.Value.ToString("HH:mm")
-                })
                 .ToListAsync();
 
-            var totalCash = payments.Where(p => p.PaymentMethod == "Nakit").Sum(p => p.Amount);
-            var totalCard = payments.Where(p => p.PaymentMethod == "Kredi Kartı").Sum(p => p.Amount);
-            var totalTransfer = payments.Where(p => p.PaymentMethod == "Havale / EFT").Sum(p => p.Amount);
+            decimal totalCash = 0;
+            decimal totalCard = 0;
+            decimal totalTransfer = 0;
+
+            // Her bir tahsilat kaydındaki parçalı ödemeleri hesapla
+            foreach (var p in payments)
+            {
+                var refText = p.TransactionReference ?? "";
+
+                // Eğer parçalı ödeme formatındaysa: [Nakit: 10000 ₺ ...]
+                if (refText.Contains("[") && refText.Contains("₺"))
+                {
+                    var matches = System.Text.RegularExpressions.Regex.Matches(refText, @"\[(.*?):\s*(\d+(?:[.,]\d+)?)\s*₺");
+                    if (matches.Count > 0)
+                    {
+                        foreach (System.Text.RegularExpressions.Match m in matches)
+                        {
+                            var method = m.Groups[1].Value.Trim();
+                            if (decimal.TryParse(m.Groups[2].Value.Replace(',', '.'), System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out var amt))
+                            {
+                                if (method.Contains("Nakit")) totalCash += amt;
+                                else if (method.Contains("Kredi Kartı")) totalCard += amt;
+                                else if (method.Contains("Havale") || method.Contains("EFT")) totalTransfer += amt;
+                                else totalCash += amt;
+                            }
+                        }
+                        continue;
+                    }
+                }
+
+                // Tek yöntemli eski kayıtlar için fallback
+                if (p.PaymentMethod == "Nakit") totalCash += p.Amount;
+                else if (p.PaymentMethod == "Kredi Kartı") totalCard += p.Amount;
+                else if (p.PaymentMethod == "Havale / EFT") totalTransfer += p.Amount;
+                else totalCash += p.Amount;
+            }
+
+            var transactions = payments.Select(p => new
+            {
+                p.Id,
+                PatientName = $"{p.Appointment.Patient.FirstName} {p.Appointment.Patient.LastName}",
+                p.Amount,
+                p.PaymentMethod,
+                TreatmentDetails = p.TransactionReference ?? "Genel Muayene",
+                Time = p.PaidAt.Value.ToString("HH:mm")
+            }).ToList();
 
             return Ok(new
             {
                 Date = targetDate.ToString("yyyy-MM-dd"),
-                TotalRevenue = payments.Sum(p => p.Amount),
+                TotalRevenue = totalCash + totalCard + totalTransfer,
                 TotalCash = totalCash,
                 TotalCard = totalCard,
                 TotalTransfer = totalTransfer,
-                Transactions = payments
+                Transactions = transactions
             });
         }
 

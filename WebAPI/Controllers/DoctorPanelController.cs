@@ -27,7 +27,7 @@ namespace WebAPI.Controllers
             _env = env;
         }
 
-        // 1. GÜNLÜK RANDEVULAR (CANLI VE FATURA / İŞLEM DETAYLI)
+        // 1. GÜNLÜK RANDEVULAR (NAKİT / KART AYRIMI VE İŞLEM DETAYLI)
         [HttpGet("daily-appointments")]
         public async Task<IActionResult> GetDailyAppointments([FromQuery] Guid? doctorId, [FromQuery] DateTime date)
         {
@@ -64,6 +64,7 @@ namespace WebAPI.Controllers
 
             var targetDate = DateTime.SpecifyKind(date.Date, DateTimeKind.Utc);
 
+            // Modelinde tekil 'Payment' olduğu için 'a.Payment' kullanıyoruz
             var appointments = await _context.Appointments
                 .Include(a => a.Patient)
                 .Include(a => a.Payment)
@@ -73,6 +74,17 @@ namespace WebAPI.Controllers
                             a.AppointmentDate.Date == targetDate.Date &&
                             a.Status != AppointmentStatus.Cancelled)
                 .OrderBy(a => a.SlotTime)
+                .ToListAsync();
+
+            // O günün randevu ID listesini alıp tüm ödemeleri ve işlemleri tek seferde çekiyoruz (Hızlı & Hatasız)
+            var appointmentIds = appointments.Select(a => a.Id).ToList();
+
+            var allPayments = await _context.Payments
+                .Where(p => appointmentIds.Contains(p.AppointmentId) && p.Status == PaymentStatus.Paid)
+                .ToListAsync();
+
+            var allTreatments = await _context.AppointmentTreatments
+                .Where(t => appointmentIds.Contains(t.AppointmentId))
                 .ToListAsync();
 
             var result = appointments.Select(a =>
@@ -87,6 +99,17 @@ namespace WebAPI.Controllers
                     }).ToList()
                     : new();
 
+                // Randevuya ait tüm parça ödemeleri (Nakit / Kredi Kartı) topla
+                var paidPayments = allPayments.Where(p => p.AppointmentId == a.Id).ToList();
+                decimal totalPaid = paidPayments.Sum(p => p.Amount);
+                var methods = string.Join(", ", paidPayments.Select(p => p.PaymentMethod).Distinct());
+
+                // Randevuya ait tüm işlem kalemlerini birleştir
+                var treatments = allTreatments.Where(t => t.AppointmentId == a.Id).ToList();
+                string summary = treatments.Any()
+                    ? string.Join(" | ", treatments.Select(t => $"{t.ProcedureName}: {t.Price} ₺"))
+                    : (a.Payment?.TransactionReference ?? "Genel Muayene");
+
                 return new
                 {
                     a.Id,
@@ -96,10 +119,10 @@ namespace WebAPI.Controllers
                     PhoneNumber = a.Patient.PhoneNumber,
                     Time = a.SlotTime.ToString(@"hh\:mm"),
                     Status = a.Status.ToString(),
-                    PaymentStatus = a.Payment != null ? a.Payment.Status.ToString() : "Unpaid",
-                    PaymentAmount = a.Payment != null ? a.Payment.Amount : 1500,
-                    PaymentMethod = a.Payment?.PaymentMethod ?? "Belirtilmedi",
-                    TreatmentDetails = a.Payment?.TransactionReference ?? "Genel Muayene", // <--- Kalem Detayları
+                    PaymentStatus = (paidPayments.Any() || a.Payment?.Status == PaymentStatus.Paid) ? "Paid" : "Unpaid",
+                    PaymentAmount = totalPaid > 0 ? totalPaid : (a.Payment != null ? a.Payment.Amount : 1500),
+                    PaymentMethod = !string.IsNullOrEmpty(methods) ? methods : (a.Payment?.PaymentMethod ?? "Belirtilmedi"),
+                    TreatmentDetails = summary,
                     HasMedicalRecord = a.MedicalRecord != null,
                     Diagnosis = a.MedicalRecord?.Diagnosis ?? "",
                     ClinicalNotes = a.MedicalRecord?.ClinicalNotes ?? "",
@@ -239,7 +262,7 @@ namespace WebAPI.Controllers
                     m.FollowUpDate,
                     PaymentAmount = m.Appointment.Payment != null ? m.Appointment.Payment.Amount : 0,
                     PaymentStatus = m.Appointment.Payment != null ? m.Appointment.Payment.Status.ToString() : "Unpaid",
-                    TreatmentDetails = m.Appointment.Payment != null ? (m.Appointment.Payment.TransactionReference ?? "Genel Muayene") : "Genel Muayene", // <--- İşlem Detayları
+                    TreatmentDetails = m.Appointment.Payment != null ? (m.Appointment.Payment.TransactionReference ?? "Genel Muayene") : "Genel Muayene",
                     Attachments = m.Attachments.Select(att => new
                     {
                         att.OriginalFileName,

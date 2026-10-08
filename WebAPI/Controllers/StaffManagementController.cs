@@ -225,8 +225,7 @@ namespace WebAPI.Controllers
                 return BadRequest(new { message = "Hekim silinirken bir hata oluştu: " + ex.Message });
             }
         }
-
-        // TAHSİLAT & ÇOKLU İŞLEM EKLEME (GÜNCELLENDİ)
+        // TAHSİLAT & ÇOKLU İŞLEM EKLEME (KÜMÜLATİF TUTAR GÜNCELLEMESİ)
         [HttpPost("charge-appointment")]
         public async Task<IActionResult> ChargeAppointment([FromBody] ChargeRequest req)
         {
@@ -236,7 +235,7 @@ namespace WebAPI.Controllers
 
             if (appointment == null) return NotFound(new { message = "Randevu bulunamadı." });
 
-            decimal totalAmount = 0;
+            decimal additionalAmount = 0;
             var summaryList = new List<string>();
 
             // Yeni eklenen işlemleri AppointmentTreatments tablosuna ekle
@@ -249,21 +248,21 @@ namespace WebAPI.Controllers
                     Price = item.Price,
                     CreatedAt = DateTime.UtcNow
                 });
-                totalAmount += item.Price;
+                additionalAmount += item.Price;
                 summaryList.Add($"{item.ProcedureName}: {item.Price} ₺");
             }
 
-            string treatmentSummary = string.Join(" | ", summaryList);
+            string newTreatmentSummary = string.Join(" | ", summaryList);
 
             if (appointment.Payment == null)
             {
                 appointment.Payment = new Payment
                 {
                     AppointmentId = req.AppointmentId,
-                    Amount = totalAmount,
+                    Amount = additionalAmount,
                     PaymentMethod = req.PaymentMethod,
                     Status = DataAccess.Enums.PaymentStatus.Paid,
-                    TransactionReference = treatmentSummary,
+                    TransactionReference = newTreatmentSummary,
                     PaidAt = DateTime.UtcNow,
                     CreatedAt = DateTime.UtcNow
                 };
@@ -271,12 +270,13 @@ namespace WebAPI.Controllers
             }
             else
             {
-                appointment.Payment.Amount = totalAmount;
+                // ÖNEMLİ DÜZELTME: Eski tutarın üstüne yeni tutarı ekle (+), ezme!
+                appointment.Payment.Amount += additionalAmount;
                 appointment.Payment.PaymentMethod = req.PaymentMethod;
                 appointment.Payment.Status = DataAccess.Enums.PaymentStatus.Paid;
-                appointment.Payment.TransactionReference = string.IsNullOrEmpty(appointment.Payment.TransactionReference)
-                    ? treatmentSummary
-                    : $"{appointment.Payment.TransactionReference} | {treatmentSummary}";
+                appointment.Payment.TransactionReference = string.IsNullOrWhiteSpace(appointment.Payment.TransactionReference)
+                    ? newTreatmentSummary
+                    : $"{appointment.Payment.TransactionReference} | {newTreatmentSummary}";
                 appointment.Payment.PaidAt = DateTime.UtcNow;
             }
 
@@ -284,7 +284,7 @@ namespace WebAPI.Controllers
             return Ok(new
             {
                 message = "Tahsilat ve işlemler başarıyla kaydedildi!",
-                totalAmount,
+                totalAmount = appointment.Payment.Amount, // Toplam birikmiş tutar (3500 + 500 = 4000)
                 treatmentSummary = appointment.Payment.TransactionReference,
                 status = "Paid"
             });
